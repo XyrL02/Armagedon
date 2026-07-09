@@ -13,6 +13,8 @@ from pathlib import Path
 
 from armagedon.core.engine import ArmagedonEngine
 from armagedon.core.database import Database
+from armagedon.core.pipeline import ExploitPipeline
+from armagedon.core.auto_privesc import AutoPrivesc
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -119,6 +121,13 @@ class ArmagedonCLI:
   run             Execute the current module
   check           Check if target is vulnerable
   search <query>  Search modules by name/CVE
+
+[bold cyan]Nexus (Auto-Exploit)[/]
+  nexus <target>          Full auto: scan → recommend → exploit
+  nexus scan <target>     Scan only (no exploit)
+  nexus recommend <target> Scan + recommend only
+  privesc                 Interactive privilege escalation
+  privesc auto            Auto-escalate (low→high risk)
 
 [bold cyan]Scan[/]
   scan <target> <ports>  Quick port scan
@@ -333,6 +342,45 @@ class ArmagedonCLI:
         self.engine.set_target(target)
         console.print(f"[green][*][/] Target set to {target}")
 
+    def do_nexus(self, arg):
+        """Nexus mode: auto scan → recommend → exploit pipeline."""
+        parts = arg.split()
+        if not parts:
+            console.print("[yellow]Usage: nexus <target>  |  nexus scan <target>  |  nexus recommend <target>[/]")
+            return
+
+        subcmd = parts[0].lower()
+        target = ""
+        if subcmd in ("scan", "recommend", "auto"):
+            if len(parts) < 2:
+                console.print(f"[yellow]Usage: nexus {subcmd} <target>[/]")
+                return
+            target = parts[1]
+        else:
+            target = parts[0]
+            subcmd = "auto"
+
+        pipeline = ExploitPipeline(self.engine)
+
+        if subcmd == "scan":
+            results = pipeline.run_scan(target)
+            pipeline.display_scan_results(results)
+        elif subcmd == "recommend":
+            results = pipeline.run_scan(target)
+            pipeline.display_scan_results(results)
+            pipeline.run_recommend()
+        else:
+            pipeline.auto_pwn(target)
+
+    def do_privesc(self, arg):
+        """Privilege escalation orchestrator."""
+        privesc = AutoPrivesc(target=self.engine.current_target or "")
+
+        if arg.strip().lower() == "auto":
+            privesc.auto_escalate()
+        else:
+            privesc.interactive_run()
+
     do_info = lambda self, _: self._show_info()
     do_question_mark = do_help
 
@@ -366,6 +414,8 @@ class ArmagedonCLI:
                     "info": self.do_info,
                     "options": lambda _: self.do_show("options"),
                     "modules": lambda _: self.do_show("modules"),
+                    "nexus": self.do_nexus,
+                    "privesc": self.do_privesc,
                 }
 
                 handler = handler_map.get(cmd)
@@ -392,6 +442,10 @@ def main():
     parser.add_argument("-t", "--target", help="Target IP address")
     parser.add_argument("-m", "--module", help="Module to run (non-interactive)")
     parser.add_argument("-s", "--scan", help="Quick scan mode: target:port")
+    parser.add_argument("--nexus", nargs="?", const=True, default=None,
+                        help="Nexus auto-exploit mode: --nexus <target>")
+    parser.add_argument("--recommend", help="Scan + recommend exploits for target")
+    parser.add_argument("--privesc", action="store_true", help="Run privilege escalation")
     parser.add_argument("-o", "--output", help="Output directory for results")
     parser.add_argument("-q", "--quiet", action="store_true", help="Quiet mode")
     parser.add_argument("--no-banner", action="store_true", help="Skip banner")
@@ -406,6 +460,22 @@ def main():
     if args.output:
         os.makedirs(args.output, exist_ok=True)
         cli.engine.output_dir = args.output
+
+    if args.nexus:
+        target = args.nexus if isinstance(args.nexus, str) else args.target
+        if not target:
+            console.print("[red]Nexus mode requires a target (--nexus <target> or --target <ip>)[/]")
+            return
+        cli.do_nexus(target)
+        return
+
+    if args.recommend:
+        cli.do_nexus(f"recommend {args.recommend}")
+        return
+
+    if args.privesc:
+        cli.do_privesc("interactive")
+        return
 
     if args.scan:
         target_info = args.scan.split(":")

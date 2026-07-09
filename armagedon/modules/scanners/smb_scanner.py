@@ -112,6 +112,57 @@ SMB_VULNERABILITY_SIGNATURES = {
 }
 
 
+class SMBScanner:
+    """Class-based scanner for programmatic use by the pipeline."""
+
+    def scan_port(self, target: str, port: int, timeout: int = 5) -> dict:
+        """Probe a single TCP port and return basic info."""
+        info = {"port": port, "open": False, "service": "", "banner": ""}
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((target, port))
+            info["open"] = True
+            s.close()
+        except Exception:
+            info["open"] = False
+        return info
+
+    def quick_scan(self, target: str, ports: str = "135,139,445,3389,5985,5986,389,88,593") -> dict:
+        """Multi-port probe returning structured data for the recommender."""
+        results = {
+            "open_ports": [],
+            "services": {},
+            "os": "",
+            "build": 0,
+            "protocols": {},
+            "hotfixes": [],
+            "smb_info": {},
+            "raw": {},
+        }
+
+        port_list = [int(p) for p in ports.split(",") if p.strip().isdigit()]
+
+        for port in port_list:
+            info = self.scan_port(target, port)
+            if info["open"]:
+                results["open_ports"].append(port)
+
+        if 445 in results["open_ports"] or 139 in results["open_ports"]:
+            smb_result = run({"RHOSTS": target, "RPORT": 445, "TIMEOUT": 5, "VERBOSE": False})
+            if smb_result.get("success"):
+                results["os"] = smb_result.get("os", "")
+                results["build"] = smb_result.get("os_version_tuple", [0, 0, 0])[2]
+                results["smb_info"] = {
+                    "version": smb_result.get("smb_version", ""),
+                    "detected": True,
+                }
+                if smb_result.get("vulnerabilities"):
+                    results["protocols"]["smb_vulns"] = smb_result["vulnerabilities"]
+
+        return results
+
+
 def run(options):
     target = options.get("RHOSTS", "")
     port = int(options.get("RPORT", 445))

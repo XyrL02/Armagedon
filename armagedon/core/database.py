@@ -182,6 +182,30 @@ class Database:
         """, (module_name, target_ip, status, str(output)[:5000], now))
         self.conn.commit()
 
+    def save_host(self, target: str, scan_data: dict):
+        """Save/update a host from scan results (used by pipeline)."""
+        os_name = scan_data.get("os", "")
+        self.add_target(
+            ip=target,
+            os=os_name,
+        )
+        if scan_data.get("open_ports"):
+            self.add_loot(
+                target,
+                "scan_ports",
+                {"ports": scan_data["open_ports"], "services": scan_data.get("services", {})},
+                source="nexus_scan",
+            )
+
+    def log_finding(self, target: str, module: str, success: bool, data: str = ""):
+        """Log a module execution result (used by pipeline)."""
+        self.log_module(
+            module_name=module,
+            target_ip=target,
+            status="success" if success else "failed",
+            output=data[:5000],
+        )
+
     def save_state(self, engine):
         pass
 

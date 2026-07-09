@@ -28,7 +28,7 @@ class ArmagedonEngine:
 
     def discover_modules(self):
         self.modules = []
-        module_types = ["scanners", "exploits", "post", "auxiliary"]
+        module_types = ["scanners", "exploits", "post", "auxiliary", "privesc", "recon"]
 
         for mod_type in module_types:
             mod_path = self.modules_dir / mod_type
@@ -69,6 +69,16 @@ class ArmagedonEngine:
         except Exception as e:
             print(f"[!] Error loading module {filepath.name}: {e}")
             return None
+
+    def list_modules(self, category: str = None) -> list:
+        """Return modules filtered by category."""
+        if not category:
+            return self.modules
+        return [m for m in self.modules if m.get("type") == category]
+
+    def get_module_names(self) -> list:
+        """Return sorted list of module names."""
+        return sorted([m["name"] for m in self.modules])
 
     def search_modules(self, query):
         query = query.lower()
