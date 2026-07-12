@@ -3,6 +3,7 @@ Armagedon SMB Scanner — Detect SMB version, OS, shares, and vulnerabilities.
 """
 import socket
 import struct
+import re
 
 CVE = "N/A"
 DESCRIPTION = "SMB Scanner — Enumerate Windows targets via SMB protocol"
@@ -40,6 +41,81 @@ SMB_NEGOTIATE_PROTOCOL = (
     b"\x02\x53\x4d\x42\x20\x32\x2e\x30\x30\x32\x00"  # SMB 2.002
     b"\x02\x53\x4d\x42\x20\x32\x2e\x3f\x3f\x3f\x00"  # SMB 2.???
 )
+
+
+def _parse_native_os(resp: bytes) -> dict:
+    """Parse the NativeOS string from SMB1 negotiate response to extract Windows version.
+
+    The NativeOS field appears after the security buffer in the SMB1 negotiate response.
+    Format: 'Windows 10.0.19041' or 'Windows NT 6.1' etc.
+    Returns dict with 'os', 'build', 'major', 'minor', 'raw' keys.
+    """
+    result = {"os": "", "build": 0, "major": 0, "minor": 0, "raw": ""}
+
+    # The NativeOS string follows the SecurityBlob in SMB1 negotiate response.
+    # We look for "Windows" followed by version info anywhere in the response.
+    try:
+        # Decode the response as latin-1 to preserve all bytes
+        raw_str = resp.decode("latin-1", errors="ignore")
+
+        # Match patterns like "Windows 10.0.19041" or "Windows NT 6.1.7601"
+        # The NativeOS field in SMB1 typically contains: "Windows <major>.<minor>.<build>"
+        patterns = [
+            r"Windows\s+(?:NT\s+)?(\d+)\.(\d+)\.(\d+)",  # Windows 10.0.19041
+            r"Windows\s+(\d+)\.(\d+)\.(\d+)",              # Windows 6.1.7601
+            r"Windows\s+NT\s+(\d+)\.(\d+)",                 # Windows NT 6.1
+        ]
+
+        for pat in patterns:
+            match = re.search(pat, raw_str)
+            if match:
+                groups = match.groups()
+                major = int(groups[0])
+                minor = int(groups[1])
+                build = int(groups[2]) if len(groups) > 2 else 0
+                result["os"] = match.group(0)
+                result["major"] = major
+                result["minor"] = minor
+                result["build"] = build
+                result["raw"] = match.group(0)
+                return result
+
+        # Fallback: try to find version info in the binary data after security buffer
+        # SMB1 negotiate response: header(32) + wordcount(1) + bytecount(2) + security_blob + NativeOS
+        if len(resp) > 36:
+            word_count = resp[32]
+            byte_count = struct.unpack_from("<H", resp, 33)[0] if len(resp) >= 35 else 0
+            native_os_offset = 36 + word_count + byte_count
+            if native_os_offset < len(resp):
+                native_os_raw = resp[native_os_offset:]
+                # Find null-terminated strings
+                strings = []
+                current = []
+                for b in native_os_raw:
+                    if b == 0:
+                        if current:
+                            try:
+                                strings.append(bytes(current).decode("latin-1", errors="ignore"))
+                            except:
+                                pass
+                            current = []
+                    else:
+                        current.append(b)
+
+                for s in strings:
+                    match = re.search(r"Windows\s+(?:NT\s+)?(\d+)\.(\d+)\.(\d+)", s)
+                    if match:
+                        groups = match.groups()
+                        result["os"] = match.group(0)
+                        result["major"] = int(groups[0])
+                        result["minor"] = int(groups[1])
+                        result["build"] = int(groups[2])
+                        result["raw"] = s.strip()
+                        return result
+    except Exception:
+        pass
+
+    return result
 
 WINDOWS_VERSIONS = {
     (10, 0, 10240): "Windows 10 1507",
@@ -152,7 +228,7 @@ class SMBScanner:
             smb_result = run({"RHOSTS": target, "RPORT": 445, "TIMEOUT": 5, "VERBOSE": False})
             if smb_result.get("success"):
                 results["os"] = smb_result.get("os", "")
-                results["build"] = smb_result.get("os_version_tuple", [0, 0, 0])[2]
+                results["build"] = smb_result.get("build", 0)
                 results["smb_info"] = {
                     "version": smb_result.get("smb_version", ""),
                     "detected": True,
@@ -188,30 +264,36 @@ def run(options):
 
         result["smb_detected"] = True
 
-        smb_version_raw = resp[68:72]
-        smb_major = smb_version_raw[1]
-        smb_minor = smb_version_raw[2]
-        smb_build_lo = smb_version_raw[3]
+        # Parse OS from NativeOS string in the negotiate response
+        native_os = _parse_native_os(resp)
 
-        os_version_tuple = (10, smb_major, smb_minor * 256 + smb_build_lo)
-        os_version_tuple_fallback = (10, smb_major, smb_minor)
-
-        os_name = WINDOWS_VERSIONS.get(
-            os_version_tuple,
-            WINDOWS_VERSIONS.get(
-                os_version_tuple_fallback,
-                f"Windows (10.0.{smb_major}.{smb_minor * 256 + smb_build_lo})"
+        if native_os["os"]:
+            os_name = native_os["os"]
+            os_version_tuple = (native_os["major"], native_os["minor"], native_os["build"])
+        else:
+            # Fallback: try the original binary extraction
+            smb_version_raw = resp[68:72]
+            smb_major = smb_version_raw[1]
+            smb_minor = smb_version_raw[2]
+            smb_build_lo = smb_version_raw[3]
+            os_version_tuple = (10, smb_major, smb_minor * 256 + smb_build_lo)
+            os_name = WINDOWS_VERSIONS.get(
+                os_version_tuple,
+                WINDOWS_VERSIONS.get(
+                    (10, smb_major, smb_minor),
+                    f"Windows (10.0.{smb_major}.{smb_minor * 256 + smb_build_lo})"
+                )
             )
-        )
 
         result["os"] = os_name
         result["os_version_tuple"] = list(os_version_tuple)
-        result["smb_version"] = f"10.0.{smb_major}.{smb_minor * 256 + smb_build_lo}"
+        result["build"] = native_os["build"] if native_os["build"] else os_version_tuple[2]
+        result["smb_version"] = f"{os_version_tuple[0]}.{os_version_tuple[1]}.{result['build']}"
 
         if verbose:
             print(f"[+] Target: {target}")
             print(f"[+] OS Detected: {os_name}")
-            print(f"[+] SMB Version: 10.0.{smb_major}.{smb_minor} (build {smb_minor * 256 + smb_build_lo})")
+            print(f"[+] SMB Version: {result['smb_version']} (build {result['build']})")
 
         vulns = []
         for vuln_key, vuln_info in SMB_VULNERABILITY_SIGNATURES.items():
