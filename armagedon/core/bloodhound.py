@@ -121,6 +121,8 @@ class AttackPath:
     edges: List[Edge]
     path_type: str
     description: str = ""
+    source_name: str = ""
+    target_name: str = ""
     severity: str = "high"  # critical, high, medium, low
     effort: str = "low"     # low, medium, high (attacker effort)
     auto_executable: bool = False
@@ -484,9 +486,13 @@ class BloodHoundAnalyzer:
                 effort = self._path_effort(path_edges)
                 desc = self._describe_path(path_edges, start_sid, current)
 
+                src_node = self.nodes.get(start_sid)
+                tgt_node = self.nodes.get(current)
                 path = AttackPath(
                     source=start_sid,
                     target=current,
+                    source_name=src_node.display_name if src_node else start_sid,
+                    target_name=tgt_node.display_name if tgt_node else current,
                     edges=list(path_edges),
                     path_type=path_type,
                     description=desc,

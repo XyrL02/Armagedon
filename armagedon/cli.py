@@ -136,7 +136,10 @@ class ArmagedonCLI:
   nexus scan <target>     Scan only (no exploit)
   nexus recommend <target> Scan + recommend only
   privesc                 Interactive privilege escalation
-  privesc auto            Auto-escalate (low→high risk)
+  privesc                          Interactive module picker
+  privesc auto                     Auto-detect priv + try all modules (low→high risk)
+  privesc auto -u U -p P -d D     Auto with remote privilege detection
+  privesc bh <dir> [--source SID]  BloodHound-driven escalation chain
 
 [bold cyan]AD Post-Enum[/]
   ad_post_enum <target> -u user -p pass -d domain  Full AD post-exploitation loop
@@ -388,13 +391,82 @@ class ArmagedonCLI:
             pipeline.auto_pwn(target)
 
     def do_privesc(self, arg):
-        """Privilege escalation orchestrator."""
+        """Privilege escalation orchestrator.
+
+        Usage:
+          privesc                          Interactive module picker
+          privesc auto                     Auto-detect priv + try all modules
+          privesc auto -u U -p P -d D     Auto with remote privilege detection
+          privesc bh <dir> [--source SID]  BloodHound-driven escalation chain
+        """
+        from armagedon.core.auto_privesc import AutoPrivesc
+
+        parts = arg.split()
         privesc = AutoPrivesc(target=self.engine.current_target or "")
 
-        if arg.strip().lower() == "auto":
-            privesc.auto_escalate()
-        else:
+        if not parts:
             privesc.interactive_run()
+            return
+
+        subcmd = parts[0].lower()
+
+        if subcmd == "auto":
+            user = passwd = domain = ""
+            i = 1
+            while i < len(parts):
+                if parts[i] == "-u" and i + 1 < len(parts):
+                    user = parts[i + 1]; i += 2
+                elif parts[i] == "-p" and i + 1 < len(parts):
+                    passwd = parts[i + 1]; i += 2
+                elif parts[i] == "-d" and i + 1 < len(parts):
+                    domain = parts[i + 1]; i += 2
+                else:
+                    i += 1
+
+            result = privesc.auto_escalate(
+                is_remote=bool(user),
+                user=user, passwd=passwd, domain=domain,
+            )
+            console.print(f"\n[bold]Result:[/] {result['status']} | "
+                          f"Final priv: {result.get('final_privilege', '?')}")
+
+        elif subcmd == "bh":
+            # BloodHound-driven chain: privesc bh <bh_dir> [--source SID]
+            bh_dir = ""
+            source_sid = ""
+            user = passwd = domain = ""
+            i = 1
+            while i < len(parts):
+                if parts[i] == "--source" and i + 1 < len(parts):
+                    source_sid = parts[i + 1]; i += 2
+                elif parts[i] == "-u" and i + 1 < len(parts):
+                    user = parts[i + 1]; i += 2
+                elif parts[i] == "-p" and i + 1 < len(parts):
+                    passwd = parts[i + 1]; i += 2
+                elif parts[i] == "-d" and i + 1 < len(parts):
+                    domain = parts[i + 1]; i += 2
+                elif not bh_dir:
+                    bh_dir = parts[i]; i += 2
+                else:
+                    i += 1
+
+            if not bh_dir:
+                console.print("[yellow]Usage: privesc bh <bloodhound_dir> [--source SID] [-u user] [-p pass] [-d domain][/]")
+                return
+
+            from armagedon.core.bloodhound import BloodHoundAnalyzer
+            analyzer = BloodHoundAnalyzer()
+            if not analyzer.load_from_directory(bh_dir):
+                console.print(f"[red]Failed to load BloodHound data from {bh_dir}[/]")
+                return
+
+            result = privesc.bloodhound_auto_escalate(
+                analyzer, source_sid=source_sid,
+                user=user, passwd=passwd, domain=domain,
+            )
+            console.print(f"\n[bold]Result:[/] {result['status']}")
+        else:
+            console.print("[yellow]Usage: privesc [auto|bh] [options][/]")
 
     def do_ad_post_enum(self, arg):
         """AD Post-Exploitation Enumeration — full automated AD post-exploitation loop."""
