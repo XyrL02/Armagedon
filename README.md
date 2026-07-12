@@ -109,9 +109,9 @@ pip install -e ".[full]" --break-system-packages
 ### Upgrade
 
 ```bash
-cd Armagedon && git pull && pip install -e --upgrade .
+cd Armagedon && git pull && pip install -e . --upgrade
 # on Kali:
-cd Armagedon && git pull && pip install -e --upgrade . --break-system-packages
+cd Armagedon && git pull && pip install -e . --upgrade --break-system-packages
 ```
 
 ### Verify
