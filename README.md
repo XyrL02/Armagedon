@@ -324,24 +324,176 @@ python3 -m armagedon --help
 
 ## Interactive Commands
 
-| Command | Description |
-|---------|-------------|
-| `help` | Show available commands |
-| `show modules` | List all modules |
-| `show options` | Show current module options |
-| `use <module>` | Select a module |
-| `set <opt> <val>` | Set a module option |
-| `run` | Execute the current module |
-| `check` | Check if target is vulnerable |
-| `search <query>` | Search modules by name or CVE |
-| `nexus <target>` | Full auto pipeline |
-| `privesc` | Privilege escalation menu |
-| `ad_post_enum <target>` | Full AD post-exploitation loop |
-| `bloodhound <dir>` | BloodHound attack path analysis |
-| `scan <target> [ports]` | Quick port scan |
-| `loot` | Show collected loot/credentials |
-| `sessions` | Show active sessions |
-| `exit` | Exit Armagedon |
+### Core
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `help` | — | Show help panel |
+| `?` | — | Alias for `help` |
+| `exit` | — | Exit Armagedon |
+| `quit` | — | Alias for `exit` |
+| `back` | — | Deselect current module, return to main menu |
+
+### Target & Module
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `target` | `<ip>` | Set target IP (same as `set RHOSTS <ip>`) |
+| `show` | `modules` | List all 27 modules with name, CVE, rank, description |
+| `show` | `options` | Show options for the currently selected module |
+| `show` | `info` | Show detailed info for the currently selected module |
+| `modules` | — | Alias for `show modules` |
+| `options` | — | Alias for `show options` |
+| `use` | `<module>` | Select a module (e.g. `use exploits/zerologon`) |
+| `set` | `<opt> <val>` | Set a module option (e.g. `set RHOSTS 10.10.10.1`) |
+| `run` | — | Execute the currently selected module |
+| `check` | — | Run the module in CHECK mode (read-only, no changes) |
+| `search` | `<query>` | Search modules by name or CVE keyword |
+| `info` | — | Alias for `show info` |
+
+### Nexus (Auto-Exploit Pipeline)
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `nexus` | `<target>` | Full auto: scan → fingerprint → recommend → exploit |
+| `nexus` | `scan <target>` | Scan only (enumerate services, no exploit) |
+| `nexus` | `recommend <target>` | Scan + recommend exploits (no execution) |
+
+### Privilege Escalation
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `privesc` | — | Interactive module picker (choose from 4 modules) |
+| `privesc` | `auto` | Auto-detect privilege level + try all modules low→high risk |
+| `privesc` | `auto -u <user> -p <pass> -d <domain>` | Auto with remote privilege detection via nxc |
+| `privesc` | `bh <dir> [--source SID] [-u user] [-p pass] [-d domain]` | BloodHound-driven escalation chain |
+
+**`privesc auto` flags:**
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-u` | No | Username for remote privilege detection |
+| `-p` | No | Password for remote privilege detection |
+| `-d` | No | Domain for remote privilege detection |
+
+**`privesc bh` flags:**
+| Flag | Required | Description |
+|------|----------|-------------|
+| `<dir>` | Yes | Directory containing BloodHound JSON files |
+| `--source` | No | SID or name of the source account to escalate from |
+| `-u` | No | Username for module execution |
+| `-p` | No | Password for module execution |
+| `-d` | No | Domain for module execution |
+
+### AD Post-Exploitation Enumeration
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `ad_post_enum` | `<target> -u <user> -p <pass> -d <domain>` | Full 8-stage AD post-exploitation loop |
+| `ad_post_enum` | `<target> -u <user> -p <pass> -d <domain> --mode <mode>` | Run specific stages only |
+
+**`ad_post_enum` flags:**
+| Flag | Required | Description |
+|------|----------|-------------|
+| `<target>` | Yes | Target IP address |
+| `-u` | Yes | Username |
+| `-p` | Yes | Password |
+| `-d` | Yes | Domain (e.g. `CORP.LOCAL`) |
+| `--mode` | No | `FULL` (default), `ENUM`, `DUMP`, `KERB`, `CRACK`, `SPRAY` |
+
+**`ad_post_enum` stages (in FULL mode):**
+1. `TEST` — Credential validation across SMB/WinRM/RDP/LDAP
+2. `ENUM` — Host enumeration (systeminfo, users, groups, processes, network, files)
+3. `DUMP` — Credential dumping (SAM, LSA, NTDS, LSASS via nxc)
+4. `LDAP` — LDAP enumeration (LAPS, GMSA, delegation, Kerberoastable, AS-REP)
+5. `KERB` — Kerberoasting + AS-REP roasting via impacket
+6. `CRACK` — Hash cracking with john
+7. `SPRAY` — Password spraying discovered passwords across domain
+
+### BloodHound Attack Path Analysis
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `bloodhound` | `<dir_or_file>` | Load + summarize BloodHound data |
+| `bloodhound` | `<dir_or_file> --mode analyze` | Find privilege escalation paths (no execution) |
+| `bloodhound` | `<dir_or_file> --mode exploit --auto-exec` | Find paths + auto-execute best ones |
+| `bloodhound` | `<dir_or_file> --source <user>` | Analyze from a specific source account |
+| `bloodhound` | `<dir_or_file> --target <SID>` | Target a specific SID |
+
+**`bloodhound` flags:**
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `<dir_or_file>` | Yes | — | Directory of SharpHound JSON files or single JSON file |
+| `--source` | No | auto | Source user SID or name to analyze escalation from |
+| `--target` | No | — | Target SID to find paths to |
+| `--mode` | No | `ANALYZE` | `CHECK`, `ANALYZE`, or `EXPLOIT` |
+| `--auto-exec` | No | off | Auto-execute best attack paths (only with `--mode exploit`) |
+| `--max-depth` | No | `6` | Maximum graph traversal depth |
+| `--max-paths` | No | `20` | Maximum number of paths to report |
+
+**`bloodhound` modes:**
+| Mode | Description |
+|------|-------------|
+| `CHECK` | Verify JSON files load correctly, show summary |
+| `ANALYZE` | Find and display all privilege escalation paths (no execution) |
+| `EXPLOIT` | Find paths + auto-execute the most promising ones using Armagedon modules |
+
+### Scan
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `scan` | `<target> [ports]` | Quick nmap port scan (default ports: 445,139,3389,5985,5986,135,389,636,88,443,80) |
+
+### Module Execution
+
+| Command | Args | Description |
+|---------|------|-------------|
+| `use` | `<category/module>` | Select module (e.g. `use exploits/zerologon`, `use privesc/token_steal`) |
+| `set` | `RHOSTS <ip>` | Set target IP for current module |
+| `set` | `MODE CHECK` | Set module to check-only mode |
+| `set` | `MODE EXPLOIT` | Set module to exploit mode (requires `SAFE_MODE=0`) |
+| `set` | `SMB_USER <user>` | Set SMB/WinRM username |
+| `set` | `SMB_PASS <pass>` | Set SMB/WinRM password |
+| `set` | `SMB_DOMAIN <domain>` | Set domain name |
+| `run` | — | Execute current module with configured options |
+| `check` | — | Run current module in CHECK mode (safe, read-only) |
+
+### Module Options Reference
+
+**Common options (all modules):**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `RHOSTS` | — | Target IP address |
+| `TIMEOUT` | `10` | Connection timeout in seconds |
+| `PAYLOAD` | `cmd.exe /c whoami` | Command to execute on target |
+| `MODE` | `CHECK` | `CHECK` (safe) or `EXPLOIT` (requires `ARMAGEDON_SAFE_MODE=0`) |
+
+**Credential options (remote modules):**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `SMB_USER` | — | SMB/Domain username |
+| `SMB_PASS` | — | SMB/Domain password |
+| `SMB_DOMAIN` | — | NetBIOS domain name |
+
+**BloodHound module options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `BLOODHOUND_DIR` | — | Directory containing SharpHound JSON output |
+| `BLOODHOUND_FILE` | — | Single BloodHound JSON file |
+| `SOURCE_USER` | auto | Source account SID or name |
+| `TARGET_SID` | — | Target SID to find paths to |
+| `MAX_DEPTH` | `6` | Max traversal depth |
+| `MAX_PATHS` | `20` | Max paths to report |
+| `AUTO_EXEC` | `false` | Auto-execute attack paths |
+| `AUTO_EXEC_LIMIT` | `5` | Max auto-executed paths |
+
+**AD Post-Enum module options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `USERNAME` | — | Authentication username |
+| `PASSWORD` | — | Authentication password |
+| `DOMAIN` | — | AD domain name |
+| `MODE` | `FULL` | `FULL`, `ENUM`, `DUMP`, `KERB`, `CRACK`, `SPRAY` |
+| `STEPS` | `TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY` | Comma-separated stages to run |
 
 ## Project Structure
 
@@ -365,24 +517,6 @@ armagedon/
     recon/                    # Reconnaissance modules
   pocs/                       # Standalone PoC binaries and source
 ```
-
-## Module Options Reference
-
-### Common Options (all modules)
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `RHOSTS` | -- | Target IP address |
-| `TIMEOUT` | 10 | Connection timeout in seconds |
-| `PAYLOAD` | `cmd.exe /c whoami` | Command to execute on target |
-
-### Credential Options (remote modules)
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `SMB_USER` | -- | SMB/Domain username |
-| `SMB_PASS` | -- | SMB/Domain password |
-| `SMB_DOMAIN` | -- | NetBIOS domain name |
 
 ## Running Tests
 
