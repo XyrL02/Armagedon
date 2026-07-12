@@ -272,40 +272,101 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
         f.write(stdout or "(no output)")
 
     if stdout:
+        in_table = False
         for line in stdout.splitlines():
-            line_stripped = line.strip()
-            # nxc --shares output: ShareName  Permissions  Comment
-            # or CSV-like: ShareName,READ,WRITE,...
-            parts = line_stripped.split()
-            if len(parts) >= 1 and parts[0] and not line_stripped.startswith("#"):
-                # Skip header lines like "ShareName  Permissions"
-                if parts[0].lower() in ("sharename", "share", "name"):
-                    continue
-                share_name = parts[0]
-                # Detect access level from remaining tokens
-                rest = " ".join(parts[1:]).upper()
-                access = "UNKNOWN"
-                if "WRITE" in rest or "FULL" in rest:
+            # nxc output format:
+            #   SMB   IP   PORT   HOST   Share           Permissions            Remark
+            #   SMB   IP   PORT   HOST   -----           -----------            ------
+            #   SMB   IP   PORT   HOST   ADMIN$                                 Remote Admin
+            #   SMB   IP   PORT   HOST   Home            READ                   description
+            #
+            # Strategy: find the "Share" header line, skip dashes, then parse columns.
+
+            # Detect header row: contains "Share" followed by "Permissions" or whitespace
+            if re.search(r'\bShare\b.*\bPermission', line, re.IGNORECASE):
+                in_table = True
+                continue
+
+            # Skip separator line (----...----)
+            if in_table and re.match(r'.*\s-{3,}\s', line):
+                continue
+
+            if not in_table:
+                continue
+
+            # Strip nxc prefix (everything before the share name column)
+            # nxc prints: "SMB   10.49.134.136   445    DC               HOME"
+            # We find the share name by looking for the column that comes after the 4th whitespace group
+            # Simpler: split on 2+ whitespace, skip first 4 tokens (SMB IP PORT HOST)
+            stripped = re.sub(r'^\S+\s+\S+\s+\S+\s+\S+\s+', '', line).strip()
+            if not stripped:
+                continue
+
+            # Now stripped looks like: "Home            READ                   description"
+            # Split into columns by 2+ whitespace
+            cols = re.split(r'\s{2,}', stripped)
+            if not cols or not cols[0]:
+                continue
+
+            share_name = cols[0].strip()
+            # Skip if it's a header/dashes
+            if share_name.lower() in ("share", "-----", "---", "name") or set(share_name) <= {'-'}:
+                continue
+
+            # Permissions is usually the second column
+            permissions = cols[1].upper() if len(cols) > 1 else ""
+            remark = cols[2] if len(cols) > 2 else ""
+
+            # If permissions doesn't look like an actual permission value,
+            # it's likely the remark column shifted — nxc omits permissions
+            # for shares where it can't determine access (e.g. ADMIN$, C$)
+            real_permission_keywords = {"READ", "WRITE", "FULL", "DENY", "NO ACCESS", "NO", ""}
+            access = "UNKNOWN"
+            if permissions in real_permission_keywords or permissions == "":
+                # Standard permission value
+                if "WRITE" in permissions or "FULL" in permissions:
                     access = "WRITE"
-                elif "READ" in rest:
+                elif "READ" in permissions:
                     access = "READ"
-                elif "DENY" in rest or "NO ACCESS" in rest:
+                elif "DENY" in permissions or "NO ACCESS" in permissions:
                     access = "DENY"
-                shares_found.append({"name": share_name, "access": access})
+                else:
+                    # Blank — need to probe with --dir
+                    access = "CHECK"
+            else:
+                # Not a permission keyword — likely the remark, so access is unknown
+                access = "CHECK"
+
+            shares_found.append({"name": share_name, "access": access, "remark": remark})
 
     print(f"  [+] Found {len(shares_found)} shares via nxc --shares")
 
     # ── Step 2: nxc --dir for every accessible share ──────────────────────
     print("  [2/5] Listing content of accessible shares ...")
+    dir_outputs = {}  # share_name -> raw output
     for sh in shares_found:
         name = sh["name"]
-        if sh["access"] in ("DENY", "UNKNOWN"):
+        if sh["access"] == "DENY":
             continue
-        accessible_shares.append(name)
+        # CHECK means blank permissions — try --dir to confirm access
+        if sh["access"] == "CHECK":
+            dir_cmd = f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" --share {name} --dir'
+            dir_out, _, dir_rc = _run_cmd(dir_cmd, timeout=30)
+            if dir_out and "STATUS_ACCESS_DENIED" not in dir_out and "Error" not in dir_out:
+                sh["access"] = "READ"
+                accessible_shares.append(name)
+            else:
+                sh["access"] = "DENY"
+        elif sh["access"] in ("READ", "WRITE"):
+            accessible_shares.append(name)
+
+        if sh["access"] in ("DENY",):
+            continue
 
         print(f"      [*] {name} ({sh['access']}) — listing root ...")
         dir_cmd = f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" --share {name} --dir'
         dir_out, _, _ = _run_cmd(dir_cmd, timeout=30)
+        dir_outputs[name] = dir_out or ""
 
         safe_name = re.sub(r'[^\w\-.]', '_', name)
         dir_file = os.path.join(share_dir, f"{safe_name}_dir.txt")
@@ -317,8 +378,8 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
     if not accessible_shares:
         print("  [-] No accessible shares found (all DENY or none listed)")
 
-    # ── Step 3: Spider accessible shares for interesting files ─────────────
-    print("  [3/5] Spidering accessible shares for interesting files ...")
+    # ── Step 3: Scan --dir output + spider for interesting files ───────────
+    print("  [3/5] Scanning share contents for interesting files ...")
     interesting_patterns = (
         r"\.txt$|\.doc$|\.docx$|\.pdf$|\.xlsx$|\.csv$"
         r"|\.kdbx$|\.config$|\.xml$|\.json$|\.ini$"
@@ -326,12 +387,22 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
         r"|\.kdb|\.pfx$|\.pem$|\.key$|\.ppk$"
     )
     spider_results = []
+
+    # Scan --dir output (already captured in Step 2)
+    for share_name in accessible_shares:
+        dir_out = dir_outputs.get(share_name, "")
+        for line in dir_out.splitlines():
+            line_clean = re.sub(r'^\S+\s+\S+\s+\S+\s+\S+\s+', '', line).strip()
+            if re.search(interesting_patterns, line_clean, re.IGNORECASE):
+                spider_results.append({"share": share_name, "file": line_clean})
+
+    # Also try nxc --spider for deeper recursion (best-effort)
     for share_name in accessible_shares:
         print(f"      [*] Spidering {share_name} ...")
         spider_cmd = (
             f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" '
             f'--share {share_name} --spider {share_name} '
-            f'--spider-folder "" --content'
+            f'--spider-folder "." --content'
         )
         spider_out, _, _ = _run_cmd(spider_cmd, timeout=120)
 
@@ -341,10 +412,13 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
             f.write(f"# Spider results for {share_name}\n\n")
             f.write(spider_out or "(no output)")
 
-        # Flag interesting files
         for line in (spider_out or "").splitlines():
-            if re.search(interesting_patterns, line, re.IGNORECASE):
-                spider_results.append({"share": share_name, "file": line.strip()})
+            line_clean = re.sub(r'^\S+\s+\S+\s+\S+\s+\S+\s+', '', line).strip()
+            if re.search(interesting_patterns, line_clean, re.IGNORECASE):
+                # Avoid duplicates
+                entry = {"share": share_name, "file": line_clean}
+                if entry not in spider_results:
+                    spider_results.append(entry)
 
     if spider_results:
         interesting_file = os.path.join(share_dir, "interesting_files.txt")
