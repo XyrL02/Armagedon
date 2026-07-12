@@ -7,6 +7,13 @@ using secretsdump (SAM, LSA, NTDS.dit) and mimikatz-like techniques.
 import subprocess
 import shutil
 import re
+import os
+
+# ── SAFETY NOTE ─────────────────────────────────────────────────────────
+# This module is READ-ONLY on the target system. It reads credential
+# stores but does NOT modify them. Hashes are saved locally.
+# RISK: LOW — no target system modification.
+# ────────────────────────────────────────────────────────────────────────
 
 NAME = "Credential Dump"
 DESCRIPTION = "Dump SAM hashes, LSA secrets, cached creds, and NTDS.dit"

@@ -8,6 +8,30 @@ steal its token.
 import subprocess
 import re
 import shutil
+import os
+
+# ── SAFETY ──────────────────────────────────────────────────────────────
+# SAFE_MODE = True:  Only CHECK mode runs. EXPLOIT is blocked.
+# SAFE_MODE = False: EXPLOIT proceeds (process injection into PID 4).
+#
+# WARNING: This exploit opens a handle to PID 4 (System) and impersonates
+#          its token. A failure can crash the calling process. The target
+#          PID 4 is not modified, but the impersonation context persists
+#          until the thread exits.
+# ────────────────────────────────────────────────────────────────────────
+SAFE_MODE = int(os.environ.get("ARMAGEDON_SAFE_MODE", "1"))
+_RISK = "MEDIUM"
+
+def _safety_gate(mode):
+    if SAFE_MODE and mode.upper() == "EXPLOIT":
+        print(f"\n  [!] ═══ SAFETY BLOCK ({_RISK} RISK) ═══")
+        print(f"  [!] SAFE_MODE=1 — exploit blocked.")
+        print(f"  [!] Process injection into PID 4 (System). May crash calling process.")
+        print(f"  [!] PID 4 itself is not modified.")
+        print(f"  [!] To run anyway: export ARMAGEDON_SAFE_MODE=0")
+        print(f"  [!] ═══════════════════════════════════════════════════\n")
+        return False
+    return True
 
 NAME = "Token Theft (SeDebugPrivilege)"
 DESCRIPTION = "Steal SYSTEM token via SeDebugPrivilege + process injection"
@@ -111,6 +135,11 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
         return result
 
     elif mode == "EXPLOIT":
+        if not _safety_gate(mode):
+            result["error"] = "BLOCKED — SAFE_MODE enabled. Export ARMAGEDON_SAFE_MODE=0 to override."
+            result["data"]["status"] = "BLOCKED"
+            return result
+
         if not smb_user or not smb_pass:
             result["error"] = "SMB credentials required for remote token theft"
             return result

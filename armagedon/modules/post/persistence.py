@@ -8,6 +8,29 @@ import subprocess
 import shutil
 import random
 import string
+import os
+
+# ── SAFETY ──────────────────────────────────────────────────────────────
+# SAFE_MODE = True:  Only CHECK mode runs. All installation is blocked.
+# SAFE_MODE = False: EXPLOIT proceeds (creates users, tasks, registry keys).
+#
+# WARNING: These persistence methods modify the target system.
+#          New users, registry keys, and scheduled tasks may be detected
+#          by blue team and cause IR response. They also leave artifacts.
+# ────────────────────────────────────────────────────────────────────────
+SAFE_MODE = int(os.environ.get("ARMAGEDON_SAFE_MODE", "1"))
+_RISK = "HIGH"
+
+def _safety_gate(mode):
+    if SAFE_MODE and mode.upper() == "EXPLOIT":
+        print(f"\n  [!] ═══ SAFETY BLOCK ({_RISK} RISK) ═══")
+        print(f"  [!] SAFE_MODE=1 — persistence installation blocked.")
+        print(f"  [!] Creates: new admin user, registry run keys, scheduled tasks.")
+        print(f"  [!] All leave detectable artifacts on the target system.")
+        print(f"  [!] To run anyway: export ARMAGEDON_SAFE_MODE=0")
+        print(f"  [!] ═══════════════════════════════════════════════════\n")
+        return False
+    return True
 
 NAME = "Persistence Installation"
 DESCRIPTION = "Install persistent backdoor via task/schedule, registry, or new user"
@@ -158,6 +181,11 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
         return result
 
     elif mode == "EXPLOIT":
+        if not _safety_gate(mode):
+            result["error"] = "BLOCKED — SAFE_MODE enabled. Export ARMAGEDON_SAFE_MODE=0 to override."
+            result["data"]["status"] = "BLOCKED"
+            return result
+
         try:
             installed = []
 

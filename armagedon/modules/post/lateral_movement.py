@@ -6,6 +6,15 @@ via SMB, WMI, WinRM, or PSExec.
 
 import subprocess
 import shutil
+import os
+
+# ── SAFETY NOTE ─────────────────────────────────────────────────────────
+# This module attempts SMB/WMI/WinRM connections using existing creds.
+# CHECK mode: host discovery only (net view). SAFE_MODE allows.
+# EXPLOIT mode: runs whoami / command on target hosts via existing
+# session — no new persistence or artifacts created.
+# RISK: LOW — uses already-compromised session, no new footholds.
+# ────────────────────────────────────────────────────────────────────────
 
 NAME = "Lateral Movement"
 DESCRIPTION = "Pivot to other hosts using stolen credentials via SMB/WMI/WinRM/PSExec"

@@ -8,6 +8,29 @@ executed with SYSTEM privileges when the service starts.
 import subprocess
 import re
 import shutil
+import os
+
+# ── SAFETY ──────────────────────────────────────────────────────────────
+# SAFE_MODE = True:  Only CHECK mode runs. EXPLOIT is blocked.
+# SAFE_MODE = False: EXPLOIT proceeds (writes file, restarts service).
+#
+# WARNING: This exploit writes an executable to disk and restarts the
+#          target service. A misconfiguration may cause the service
+#          to fail to start after the restart.
+# ────────────────────────────────────────────────────────────────────────
+SAFE_MODE = int(os.environ.get("ARMAGEDON_SAFE_MODE", "1"))
+_RISK = "MEDIUM"
+
+def _safety_gate(mode):
+    if SAFE_MODE and mode.upper() == "EXPLOIT":
+        print(f"\n  [!] ═══ SAFETY BLOCK ({_RISK} RISK) ═══")
+        print(f"  [!] SAFE_MODE=1 — exploit blocked.")
+        print(f"  [!] Writes a file to disk and restarts a Windows service.")
+        print(f"  [!] Service may fail to start after restart if misconfigured.")
+        print(f"  [!] To run anyway: export ARMAGEDON_SAFE_MODE=0")
+        print(f"  [!] ═══════════════════════════════════════════════════\n")
+        return False
+    return True
 
 NAME = "Unquoted Service Path"
 DESCRIPTION = "Exploit unquoted service paths to gain SYSTEM execution"
@@ -165,6 +188,11 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
         return result
 
     elif mode == "EXPLOIT":
+        if not _safety_gate(mode):
+            result["error"] = "BLOCKED — SAFE_MODE enabled. Export ARMAGEDON_SAFE_MODE=0 to override."
+            result["data"]["status"] = "BLOCKED"
+            return result
+
         services = _find_unquoted_paths(rhosts, smb_user, smb_pass, smb_domain, timeout)
         if not services:
             result["error"] = "No unquoted service paths found"

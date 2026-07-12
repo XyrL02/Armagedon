@@ -5,6 +5,11 @@ routing table, DNS cache, network interfaces, listening ports,
 and active connections.
 """
 
+# ── SAFETY ──────────────────────────────────────────────────────────────
+# Risk: LOW — read-only enumeration, no system modification.
+# All commands are non-destructive network information gathering.
+# ────────────────────────────────────────────────────────────────────────
+
 import subprocess
 import shutil
 import re
