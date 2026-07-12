@@ -6,7 +6,10 @@ via SMB, WMI, WinRM, or PSExec.
 
 import subprocess
 import shutil
+import logging
 import os
+
+log = logging.getLogger("armagedon.modules.post.lateral_movement")
 
 # ── SAFETY NOTE ─────────────────────────────────────────────────────────
 # This module attempts SMB/WMI/WinRM connections using existing creds.
@@ -131,6 +134,8 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
     smb_domain = options.get("SMB_DOMAIN", "")
     target_hosts = options.get("TARGET_HOSTS", "").split(",") if options.get("TARGET_HOSTS") else []
 
+    log.info(f"Lateral movement run against {rhosts} mode={mode}")
+
     result = {
         "success": False,
         "technique": NAME,
@@ -142,11 +147,13 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
 
     if not rhosts or not smb_user or not smb_pass:
         result["error"] = "RHOSTS, SMB_USER, SMB_PASS required"
+        log.error(result["error"])
         return result
 
     cmd = shutil.which("impacket-wmiexec") or shutil.which("wmiexec.py")
     if not cmd:
         result["error"] = "impacket-wmiexec not found"
+        log.error(result["error"])
         return result
 
     auth = f"{smb_domain}/{smb_user}:{smb_pass}" if smb_domain else f"{smb_user}:{smb_pass}"

@@ -8,7 +8,10 @@ executed with SYSTEM privileges when the service starts.
 import subprocess
 import re
 import shutil
+import logging
 import os
+
+log = logging.getLogger("armagedon.modules.privesc.service_privesc")
 
 # ── SAFETY ──────────────────────────────────────────────────────────────
 # SAFE_MODE = True:  Only CHECK mode runs. EXPLOIT is blocked.
@@ -168,6 +171,8 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
     smb_pass = options.get("SMB_PASS", "")
     smb_domain = options.get("SMB_DOMAIN", "")
 
+    log.info(f"Service privesc run against {rhosts} mode={mode}")
+
     result = {
         "success": False,
         "technique": NAME,
@@ -179,6 +184,7 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
 
     if not rhosts or not smb_user or not smb_pass:
         result["error"] = "RHOSTS, SMB_USER, SMB_PASS required"
+        log.error(result["error"])
         return result
 
     if mode == "CHECK":
@@ -191,6 +197,7 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
         if not _safety_gate(mode):
             result["error"] = "BLOCKED — SAFE_MODE enabled. Export ARMAGEDON_SAFE_MODE=0 to override."
             result["data"]["status"] = "BLOCKED"
+            log.warning(result["error"])
             return result
 
         services = _find_unquoted_paths(rhosts, smb_user, smb_pass, smb_domain, timeout)

@@ -5,11 +5,14 @@ Entry point for console_scripts: armagedon
 """
 import sys
 import os
+import logging
 import argparse
 import signal
 import readline
 import atexit
 from pathlib import Path
+
+log = logging.getLogger("armagedon.cli")
 
 from armagedon.core.engine import ArmagedonEngine
 from armagedon.core.database import Database
@@ -38,12 +41,18 @@ BANNER = """
 
 class ArmagedonCLI:
     def __init__(self):
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        )
+        log.info("Armagedon CLI initializing")
         self.engine = ArmagedonEngine()
         self.db = Database()
         self.running = True
         self.history_file = os.path.expanduser("~/.armagedon_history")
         self._setup_completion()
         self._load_history()
+        log.debug("CLI ready — history=%s", self.history_file)
 
     def _setup_completion(self):
         try:

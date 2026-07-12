@@ -6,6 +6,9 @@ import socket
 import struct
 import ssl
 import base64
+import logging
+
+log = logging.getLogger("armagedon.modules.scanners.vuln_scanner")
 
 CVE = "N/A"
 DESCRIPTION = "Multi-Vulnerability Scanner — Comprehensive Windows target assessment"
@@ -167,6 +170,7 @@ def run(options):
     if not target:
         return {"success": False, "error": "No target specified"}
 
+    log.info(f"Vuln scanner target={target} all_ports={all_ports}")
     print(f"\n{'='*60}")
     print(f"  Armagedon Multi-Vulnerability Scanner")
     print(f"  Target: {target}")

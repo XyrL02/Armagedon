@@ -1,6 +1,7 @@
 """Exploit pipeline — scan → recommend → exploit → privesc chain."""
 
 import importlib
+import logging
 import sys
 from rich.console import Console
 from rich.panel import Panel
@@ -10,6 +11,7 @@ from rich.table import Table
 from armagedon.core.recommender import Recommender
 from armagedon.core.database import Database
 
+log = logging.getLogger("armagedon.core.pipeline")
 console = Console()
 
 
@@ -26,6 +28,7 @@ class ExploitPipeline:
     def run_scan(self, target: str, ports: str = None) -> dict:
         """Phase 1: Scan the target for open ports, OS, services."""
         self.target = target
+        log.info("Starting scan on %s (ports=%s)", target, ports)
         console.print(Panel(f"[bold cyan]Nexus Scan[/] — {target}", border_style="cyan"))
 
         results = {
@@ -78,6 +81,7 @@ class ExploitPipeline:
 
         self.scan_results = results
         self.db.save_host(target, results)
+        log.info("Scan complete: %d open ports, os=%s", len(results.get("open_ports", [])), results.get("os", "unknown"))
 
         return results
 
@@ -107,6 +111,7 @@ class ExploitPipeline:
 
     def run_recommend(self) -> list:
         """Phase 2: Recommend exploits based on scan data."""
+        log.info("Running exploit recommendation for %s", self.target)
         console.print(
             Panel(
                 "[bold yellow]Analyzing target and matching exploits...[/]",
@@ -121,6 +126,7 @@ class ExploitPipeline:
 
     def run_exploit(self, module_name: str, mode: str = "check") -> dict:
         """Phase 3: Execute a specific exploit module."""
+        log.info("Running exploit %s (mode=%s)", module_name, mode)
         console.print(
             Panel(
                 f"[bold red]Launching exploit: {module_name}[/] ({mode})",
@@ -173,8 +179,10 @@ class ExploitPipeline:
             )
 
         if result["error"]:
+            log.warning("Exploit %s failed: %s", module_name, result["error"])
             console.print(f"[red]Exploit failed: {result['error']}[/]")
         else:
+            log.info("Exploit %s completed successfully", module_name)
             console.print(
                 f"[green]Exploit completed ({mode}).[/]"
             )
@@ -183,6 +191,7 @@ class ExploitPipeline:
 
     def auto_pwn(self, target: str, ports: str = None) -> dict:
         """Full auto chain: scan → recommend → execute."""
+        log.info("Starting auto_pwn on %s", target)
         console.print(
             Panel.fit(
                 "[bold red]A R M A G E D O N — N E X U S   M O D E[/]\n"
@@ -195,11 +204,13 @@ class ExploitPipeline:
         self.display_scan_results(results)
 
         if not results.get("open_ports"):
+            log.warning("No open ports detected — aborting auto_pwn")
             console.print("[red]No open ports detected. Aborting.[/]")
             return {"status": "failed", "reason": "no_open_ports"}
 
         candidates = self.run_recommend()
         if not candidates:
+            log.warning("No applicable exploits found")
             console.print("[red]No applicable exploits found.[/]")
             return {"status": "failed", "reason": "no_exploits"}
 

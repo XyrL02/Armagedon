@@ -1,7 +1,10 @@
 """OS, service, and patch fingerprint database.
 Maps scan findings to exploit applicability."""
 
+import logging
 import re
+
+log = logging.getLogger("armagedon.core.fingerprints")
 
 OS_SIGNATURES = {
     "Windows 10 22H2": {
@@ -57,12 +60,14 @@ OS_SIGNATURES = {
 
 def identify_os(build_number: int, nt_version: str = "") -> list:
     """Return possible OS names matching a build number."""
+    log.info("identify_os: build=%d nt=%s", build_number, nt_version)
     matches = []
     for name, info in OS_SIGNATURES.items():
         if info["build_min"] <= build_number <= info["build_max"]:
             matches.append(name)
         elif nt_version and info["nt"] == nt_version:
             matches.append(name)
+    log.debug("identify_os: build=%d nt=%s → %s", build_number, nt_version, matches)
     return matches
 
 
@@ -71,7 +76,9 @@ def build_to_cpe(build_number: int) -> str:
     for name, info in OS_SIGNATURES.items():
         if info["build_min"] <= build_number <= info["build_max"]:
             ver = name.lower().replace(" ", "_")
-            return f"cpe:/o:microsoft:{ver}"
+            cpe = f"cpe:/o:microsoft:{ver}"
+            log.debug("build_to_cpe: %d → %s", build_number, cpe)
+            return cpe
     return f"cpe:/o:microsoft:windows_unknown"
 
 

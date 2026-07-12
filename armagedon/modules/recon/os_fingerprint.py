@@ -2,6 +2,9 @@
 
 import socket
 import struct
+import logging
+
+log = logging.getLogger("armagedon.modules.recon.os_fingerprint")
 
 CVE = "N/A"
 DESCRIPTION = "OS Fingerprint — Identify Windows version, build, and hotfixes"
@@ -47,6 +50,7 @@ def run(options):
     if not target:
         return {"success": False, "error": "No target"}
 
+    log.info(f"OS fingerprint target={target}")
     result = {"success": False, "target": target}
 
     try:

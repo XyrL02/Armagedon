@@ -3,9 +3,12 @@ Armagedon Database — SQLite-based persistence for targets, sessions, loot, cre
 """
 import sqlite3
 import json
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
+
+log = logging.getLogger("armagedon.core.database")
 
 
 class Database:
@@ -15,6 +18,7 @@ class Database:
             user_dir.mkdir(parents=True, exist_ok=True)
             db_path = user_dir / "armagedon.db"
         self.db_path = db_path
+        log.info("Database: %s", db_path)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self._init_tables()
@@ -100,6 +104,7 @@ class Database:
     def add_target(self, ip, hostname="", os="", domain="", os_version="", arch=""):
         c = self.conn.cursor()
         now = datetime.utcnow().isoformat()
+        log.info("add_target: %s (os=%s)", ip, os)
         c.execute("""
             INSERT INTO targets (ip, hostname, os, domain, os_version, architecture, first_seen, last_seen)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -118,6 +123,7 @@ class Database:
     def add_session(self, target_ip, session_type, platform, username="", process="", pid=0, arch=""):
         c = self.conn.cursor()
         now = datetime.utcnow().isoformat()
+        log.info("add_session: %s type=%s user=%s", target_ip, session_type, username)
         c.execute("""
             INSERT INTO sessions (target_ip, session_type, platform, username, process, pid, arch, opened, last_seen)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -135,6 +141,7 @@ class Database:
     def add_loot(self, target_ip, loot_type, data, source=""):
         c = self.conn.cursor()
         now = datetime.utcnow().isoformat()
+        log.info("add_loot: %s type=%s source=%s", target_ip, loot_type, source)
         if isinstance(data, (dict, list)):
             data = json.dumps(data)
         c.execute("""
@@ -151,6 +158,7 @@ class Database:
     def add_cred(self, target_ip, username, credential, cred_type, source=""):
         c = self.conn.cursor()
         now = datetime.utcnow().isoformat()
+        log.info("add_cred: %s user=%s type=%s", target_ip, username, cred_type)
         c.execute("""
             INSERT INTO credentials (target_ip, username, credential, type, source, date)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -165,6 +173,7 @@ class Database:
     def add_finding(self, target_ip, cve, title, severity, description, proof=""):
         c = self.conn.cursor()
         now = datetime.utcnow().isoformat()
+        log.info("add_finding: %s cve=%s severity=%s", target_ip, cve, severity)
         c.execute("""
             INSERT INTO findings (target_ip, cve, title, severity, description, proof, date)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -174,6 +183,7 @@ class Database:
     def log_module(self, module_name, target_ip, status, output=""):
         c = self.conn.cursor()
         now = datetime.utcnow().isoformat()
+        log.info("log_module: %s target=%s status=%s", module_name, target_ip, status)
         if isinstance(output, dict):
             output = json.dumps(output)
         c.execute("""
@@ -185,6 +195,7 @@ class Database:
     def save_host(self, target: str, scan_data: dict):
         """Save/update a host from scan results (used by pipeline)."""
         os_name = scan_data.get("os", "")
+        log.debug("save_host: %s os=%s", target, os_name)
         self.add_target(
             ip=target,
             os=os_name,
@@ -199,6 +210,7 @@ class Database:
 
     def log_finding(self, target: str, module: str, success: bool, data: str = ""):
         """Log a module execution result (used by pipeline)."""
+        log.info("log_finding: %s module=%s success=%s", target, module, success)
         self.log_module(
             module_name=module,
             target_ip=target,

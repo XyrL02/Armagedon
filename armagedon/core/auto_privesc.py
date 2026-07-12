@@ -2,11 +2,13 @@
 Discovers and runs applicable privesc modules on a compromised host."""
 
 import importlib
+import logging
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt
 
+log = logging.getLogger("armagedon.core.auto_privesc")
 console = Console()
 
 
@@ -54,6 +56,7 @@ class AutoPrivesc:
                 "id": mod_id,
                 **meta,
             })
+        log.debug("Listed %d privesc modules", len(modules))
         return modules
 
     def display_privesc_options(self):
@@ -79,6 +82,7 @@ class AutoPrivesc:
 
     def run_module(self, module_id: str, **kwargs) -> dict:
         """Execute a specific privesc module."""
+        log.info("Running privesc module: %s target=%s", module_id, self.target)
         console.print(
             Panel(
                 f"[bold yellow]Running privesc: {module_id}[/]",
@@ -104,8 +108,10 @@ class AutoPrivesc:
             result["error"] = str(e)
 
         if result["error"]:
+            log.warning("Privesc %s failed: %s", module_id, result["error"])
             console.print(f"[red]Privesc failed: {result['error']}[/]")
         else:
+            log.info("Privesc %s completed (success=%s)", module_id, result.get("success"))
             status = "[green]SYSTEM access gained[/]" if result.get("success") else "[yellow]Failed[/]"
             console.print(f"{status}")
 
@@ -130,6 +136,7 @@ class AutoPrivesc:
 
     def auto_escalate(self, current_privilege: str = "user") -> dict:
         """Auto-try privesc modules in order of risk, stop when SYSTEM."""
+        log.info("Auto-escalate: starting (priv=%s)", current_privilege)
         console.print(
             Panel(
                 "[bold yellow]Auto privilege escalation engaged...[/]",
@@ -153,6 +160,7 @@ class AutoPrivesc:
                     "success": result.get("success", False),
                 })
                 if result.get("success"):
+                    log.info("Escalated via %s", mod_id)
                     console.print(
                         f"[bold green]Escalated via {mod_id}![/]"
                     )
@@ -162,6 +170,7 @@ class AutoPrivesc:
                         "results": results_summary,
                     }
 
+        log.warning("All privesc attempts failed")
         console.print("[red]All privesc attempts failed.[/]")
         return {
             "status": "failed",

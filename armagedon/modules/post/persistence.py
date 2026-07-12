@@ -8,7 +8,10 @@ import subprocess
 import shutil
 import random
 import string
+import logging
 import os
+
+log = logging.getLogger("armagedon.modules.post.persistence")
 
 # ── SAFETY ──────────────────────────────────────────────────────────────
 # SAFE_MODE = True:  Only CHECK mode runs. All installation is blocked.
@@ -149,6 +152,8 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
     smb_pass = options.get("SMB_PASS", "")
     smb_domain = options.get("SMB_DOMAIN", "")
 
+    log.info(f"Persistence run against {rhosts} mode={mode}")
+
     result = {
         "success": False,
         "technique": NAME,
@@ -160,11 +165,13 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
 
     if not rhosts or not smb_user or not smb_pass:
         result["error"] = "RHOSTS, SMB_USER, SMB_PASS required"
+        log.error(result["error"])
         return result
 
     cmd = shutil.which("impacket-wmiexec") or shutil.which("wmiexec.py")
     if not cmd:
         result["error"] = "impacket-wmiexec not found"
+        log.error(result["error"])
         return result
 
     auth = f"{smb_domain}/{smb_user}:{smb_pass}" if smb_domain else f"{smb_user}:{smb_pass}"
@@ -184,6 +191,7 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
         if not _safety_gate(mode):
             result["error"] = "BLOCKED — SAFE_MODE enabled. Export ARMAGEDON_SAFE_MODE=0 to override."
             result["data"]["status"] = "BLOCKED"
+            log.warning(result["error"])
             return result
 
         try:

@@ -4,8 +4,11 @@ Handles module loading, execution, and framework state.
 """
 import json
 import importlib
+import logging
 from pathlib import Path
 from datetime import datetime
+
+log = logging.getLogger("armagedon.core.engine")
 
 
 class ArmagedonEngine:
@@ -29,6 +32,7 @@ class ArmagedonEngine:
     def discover_modules(self):
         self.modules = []
         module_types = ["scanners", "exploits", "post", "auxiliary", "privesc", "recon"]
+        log.info("Discovering modules from %s", self.modules_dir)
 
         for mod_type in module_types:
             mod_path = self.modules_dir / mod_type
@@ -42,6 +46,7 @@ class ArmagedonEngine:
                 if module_info:
                     self.modules.append(module_info)
 
+        log.info("Discovered %d modules", len(self.modules))
         return self.modules
 
     def _get_module_info(self, filepath):
@@ -65,8 +70,10 @@ class ArmagedonEngine:
                 "required": getattr(mod, "REQUIRED", {}),
                 "descriptions": getattr(mod, "DESCRIPTIONS", {}),
             }
+            log.debug("Loaded module: %s (%s)", info["name"], info["cve"])
             return info
         except Exception as e:
+            log.error("Error loading module %s: %s", filepath.name, e)
             print(f"[!] Error loading module {filepath.name}: {e}")
             return None
 
@@ -107,6 +114,7 @@ class ArmagedonEngine:
 
     def set_target(self, target):
         self.current_target = target
+        log.info("Target set: %s", target)
         if self.active_module:
             self.active_module["options"]["RHOSTS"] = target
 
@@ -115,14 +123,18 @@ class ArmagedonEngine:
             return {"success": False, "error": "No module selected"}
         try:
             mod = self.active_module["module"]
+            log.info("Running module: %s", self.active_module["name"])
             if hasattr(mod, "run"):
                 if self.current_target:
                     mod.OPTIONS["RHOSTS"] = self.current_target
                 result = mod.run(mod.OPTIONS)
+                log.debug("Module %s finished", self.active_module["name"])
                 return result
             else:
+                log.warning("Module %s has no run() function", self.active_module["name"])
                 return {"success": False, "error": "Module has no run() function"}
         except Exception as e:
+            log.error("Module %s failed: %s", self.active_module["name"], e)
             import traceback
             return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
@@ -131,18 +143,21 @@ class ArmagedonEngine:
             return False
         try:
             mod = self.active_module["module"]
+            log.info("Checking module: %s", self.active_module["name"])
             if hasattr(mod, "check"):
                 if self.current_target:
                     mod.OPTIONS["RHOSTS"] = self.current_target
                 return mod.check(mod.OPTIONS)
             return None
         except Exception as e:
+            log.error("Check failed for %s: %s", self.active_module["name"], e)
             print(f"[!] Check failed: {e}")
             return False
 
     def quick_scan(self, target, ports):
         results = []
         port_list = [p.strip() for p in ports.split(",")]
+        log.info("Quick scan: %s ports=%s", target, ports)
 
         import socket
         for port in port_list:
@@ -169,6 +184,7 @@ class ArmagedonEngine:
                 s.close()
             except:
                 pass
+        log.info("Quick scan found %d open ports", len(results))
         return results
 
     def _guess_service(self, port):

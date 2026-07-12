@@ -4,6 +4,9 @@ Armagedon SMB Scanner — Detect SMB version, OS, shares, and vulnerabilities.
 import socket
 import struct
 import re
+import logging
+
+log = logging.getLogger("armagedon.modules.scanners.smb_scanner")
 
 CVE = "N/A"
 DESCRIPTION = "SMB Scanner — Enumerate Windows targets via SMB protocol"
@@ -248,6 +251,7 @@ def run(options):
     if not target:
         return {"success": False, "error": "No target specified"}
 
+    log.info(f"SMB scanner target={target}:{port}")
     result = {"success": False, "target": target, "port": port}
 
     try:

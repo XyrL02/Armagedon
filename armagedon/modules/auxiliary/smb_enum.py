@@ -2,6 +2,9 @@
 Armagedon SMB Enumerator — Enumerate SMB shares, users, and sessions.
 """
 import socket
+import logging
+
+log = logging.getLogger("armagedon.modules.auxiliary.smb_enum")
 
 CVE = "N/A"
 DESCRIPTION = "SMB Enumerator — List shares, users, and sessions on Windows targets"
@@ -71,6 +74,7 @@ def run(options):
     if not target:
         return {"success": False, "error": "No target specified"}
 
+    log.info(f"SMB enumeration target={target}:{port}")
     print(f"\n[+] SMB Enumeration on {target}:{port}")
     print(f"{'='*50}")
 
