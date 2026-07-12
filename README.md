@@ -100,6 +100,33 @@ cd Armagedon && git pull && pip install --upgrade .
 armagedon --help
 ```
 
+## Safety Mode
+
+All exploit and privesc modules have a **SAFE_MODE** gate enabled by default. This prevents accidental damage to target systems.
+
+```bash
+# SAFE_MODE=1 (default) — blocks all destructive operations
+armagedon --rhosts 10.10.10.1 --mode exploit  # BLOCKED
+
+# SAFE_MODE=0 — allows exploit execution
+export ARMAGEDON_SAFE_MODE=0
+armagedon --rhosts 10.10.10.1 --mode exploit  # proceeds
+
+# Re-enable safety
+export ARMAGEDON_SAFE_MODE=1
+```
+
+**What SAFE_MODE blocks:**
+
+| Risk Level | Modules | Blocked Operations |
+|------------|---------|-------------------|
+| CRITICAL | zerologon, madlicense, samaccountname_spoof | EXPLOIT (DC password reset, RCE, AD account modification) |
+| HIGH | All kernel/service exploits, persistence | EXPLOIT + CRASH (driver loading, registry writes, user/task creation) |
+| MEDIUM | privesc (token steal, UAC bypass, service privesc, potato) | EXPLOIT (process injection, registry writes, service restart) |
+| LOW | credential_dump, lateral_movement, network_discovery | Not blocked (read-only enumeration) |
+
+**CHECK mode always runs** (read-only, no modifications). Set `ARMAGEDON_SAFE_MODE=0` only when targeting isolated test/lab machines.
+
 ## Usage
 
 ### Interactive CLI
