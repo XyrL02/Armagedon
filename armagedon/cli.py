@@ -25,17 +25,14 @@ from rich import print as rprint
 
 console = Console()
 
-BANNER = """
-╔══════════════════════════════════════════════════════════════╗
-║  █████╗ ██████╗ ███╗   ███╗ █████╗  ██████╗ ███████╗██████╗  ║
-║ ██╔══██╗██╔══██╗████╗ ████║██╔══██╗██╔════╝ ██╔════╝██╔══██╗ ║
-║ ███████║██████╔╝██╔████╔██║███████║██║  ███╗█████╗  ██║  ██║ ║
-║ ██╔══██║██╔══██╗██║╚██╔╝██║██╔══██║██║   ██║██╔══╝  ██║  ██║ ║
-║ ██║  ██║██║  ██║██║ ╚═╝ ██║██║  ██║╚██████╔╝███████╗██████╔╝ ║
-║ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═════╝  ║
-║     Windows Exploitation Framework — v1.0.0                    ║
-║     "Fall of the walled garden"                                ║
-╚══════════════════════════════════════════════════════════════════╝
+BANNER = r"""
+ ____  _____ _  ______ _  ___ _     ___ ___ _  _  ____
+|  _ \| ____| |/ / __ \ |/ (_) |   |_ _/ __| || |/ ___|
+| |_) |  _| | ' <|  _ | ' /| |    | |\__ \ __ | | |
+|  __/| |___| . \| |_) | . \| |___| |___) | | | |___
+|_|   |_____|_|\_\____/|_|\_\_____|___|____/_| |_|
+         Windows Exploitation Framework — v1.0.0
+              "Fall of the walled garden"
 """
 
 
@@ -581,7 +578,8 @@ class ArmagedonCLI:
 
     def run(self):
         console.print(BANNER)
-        console.print(f"[dim]Loaded {len(self.engine.modules)} modules | {len(self.engine.modules)} exploits available[/]\n")
+        exploit_count = sum(1 for m in self.engine.modules if m["name"].startswith("exploits/"))
+        console.print(f"[dim]Loaded {len(self.engine.modules)} modules | {exploit_count} exploits available[/]\n")
 
         if not self.engine.current_target:
             console.print("[dim]Tip: set a target with 'set RHOSTS <ip>' or 'target <ip>'[/]")
