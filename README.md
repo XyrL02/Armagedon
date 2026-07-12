@@ -1,148 +1,160 @@
 # Armagedon
 
-Advanced Windows Exploitation Framework.
+Advanced Windows Exploitation Framework
 
-> "Fall of the walled garden"
+> *"Fall of the walled garden"*
+
+Armagedon is a modular Windows exploitation framework featuring automated scan-to-exploit pipelines, exploit recommendation, and privilege escalation orchestration. Built for authorized penetration testing and security research.
+
+## Features
+
+- **Nexus Mode** -- Fully automated scan, recommend, exploit pipeline
+- **Exploit Recommendation** -- Fingerprint-based matching of CVEs to target services
+- **Privilege Escalation** -- Auto and interactive privesc orchestration
+- **Modular Architecture** -- Easy to add new exploit modules
+- **SQLite Persistence** -- Tracks targets, sessions, loot, and findings
+- **Interactive CLI** -- Tab completion, command history, rich terminal UI
+
+## Modules
+
+| Category | Module | CVE | CVSS | Description |
+|----------|--------|-----|------|-------------|
+| Exploits | `cve_2024_38077_madlicense_eop` | CVE-2024-38077 | 9.8 | Windows RDL Service Heap Overflow (pre-auth RCE to SYSTEM) |
+| Exploits | `cve_2024_43641_ffi_registry_eop` | CVE-2024-43641 | 7.8 | Windows Registry FFI EoP |
+| Exploits | `cve_2024_21338_appid_privesc` | CVE-2024-21338 | 7.8 | AppID Kernel Use-After-Free LPE |
+| Exploits | `cve_2024_26234_proxydriver_spoof` | CVE-2024-26234 | 7.5 | Proxy Driver Key Spoofing |
+| Exploits | `cve_2024_26229_csc_lpe` | CVE-2024-26229 | 7.8 | CSC Service LPE |
+| Exploits | `cve_2025_21217_win_kernel_lpe` | CVE-2025-21217 | 7.8 | Windows Kernel Type Confusion LPE |
+| Scanners | `smb_scanner` | -- | -- | SMB service detection and fingerprinting |
+| Scanners | `vuln_scanner` | -- | -- | Vulnerability scanner |
+| Privesc | `token_steal` | -- | -- | SYSTEM token duplication from Winlogon/LSASS |
+| Privesc | `uac_bypass` | -- | -- | UAC bypass via eventvwr / fodhelper |
+| Privesc | `service_privesc` | -- | -- | Weak service permissions / unquoted path exploitation |
+| Privesc | `stored_creds` | -- | -- | Saved credentials, vault, WLAN password extraction |
+| Auxiliary | `smb_enum` | -- | -- | SMB enumeration |
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.11+
 - pip
 - git
 
-### Option 1: From GitHub (Private Repo)
-
-Since this repo is private, you need a **GitHub Personal Access Token (PAT)**
-to install it. A PAT is like a password for your terminal to access GitHub.
-
----
-
-#### How to create your Personal Access Token (step by step)
-
-> If you already have a token, skip to Step 2.
-
-| # | What to do | Where to click |
-|---|------------|----------------|
-| 1 | Log into your GitHub account at [github.com](https://github.com) | — |
-| 2 | Click your **profile icon** (top-right corner) → **Settings** | `Settings` |
-| 3 | Scroll down the left sidebar → click **Developer settings** (near the bottom) | `Developer settings` |
-| 4 | Click **Personal access tokens** → **Tokens (classic)** | `Tokens (classic)` |
-| 5 | Click **Generate new token (classic)** — you may be asked to re-enter your password | `Generate new token (classic)` |
-| 6 | Under **Note**, type a name for this token (e.g., `armagedon-install`) — anything you'll recognize | `armagedon-install` |
-| 7 | Under **Expiration**, choose when this token expires (e.g., `30 days`, `90 days`, or `No expiration`). Pick what works for you. | Your choice |
-| 8 | Under **Select scopes**, scroll down and check the box for **`repo`** (it will auto-check all sub-scopes below it, giving full access to your private repos) | ☑ `repo` |
-| 9 | Scroll to the bottom and click **Generate token** | `Generate token` |
-| 10 | **IMPORTANT** — Copy the token **immediately**. It looks like `ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx`. If you close this page, you can never see it again and must create a new one. | Copy it now |
-
-✅ You now have your PAT. Keep it somewhere safe (like a password manager).
-
----
-
-#### Step 2 — Install Armagedon
-
-Now use your token in the install command:
+### From GitHub
 
 ```bash
-pip install git+https://YOUR_GITHUB_USERNAME:YOUR_PAT@github.com/XyrL02/Armagedon.git
-```
-
-Replace two things:
-- `YOUR_GITHUB_USERNAME` → your GitHub username (e.g., `john`)
-- `YOUR_PAT` → the token you copied above (starts with `ghp_`)
-
-**Example** (using the actual repo owner's token — yours will be different):
-
-```bash
-pip install git+https://XyrL02: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@github.com/XyrL02/Armagedon.git
-```
-
----
-
-#### ⚠️ When your token expires
-
-GitHub tokens have an expiration date. When yours expires, you'll get an error:
-```
-fatal: authentication failed
-```
-
-**Don't worry** — just generate a new one:
-
-1. Go back to https://github.com/settings/tokens
-2. Delete the old expired token (click the trash icon)
-3. Click **Generate new token (classic)** — same steps as above
-4. Copy the new token and run the install command again with the new token
-
----
-
-#### How to see how much time is left on your token
-
-Go to https://github.com/settings/tokens — each token shows its expiration date
-in the `Expires` column (e.g., `Jul 30, 2026` or `Never`).
-
-### Option 2: Clone + Local Install (No Token Needed for Updates)
-
-```bash
-# Clone (one-time, requires token)
-git clone https://YOUR_GITHUB_USERNAME:YOUR_PAT@github.com/XyrL02/Armagedon.git
-cd Armagedon
-
-# Install
-pip install .
-
-# Update later (no token needed — just pull)
-git pull
-```
-
-### Option 3: SSH (Alternative — Requires SSH Key Setup)
-
-```bash
-# Add SSH key to GitHub first, then:
-git clone git@github.com:XyrL02/Armagedon.git
+git clone https://github.com/XyrL02/Armagedon.git
 cd Armagedon
 pip install .
 ```
 
-#### How to update Armagedon (when a new version is released)
-
-Same command as install, just add `--upgrade`:
+### With all optional dependencies
 
 ```bash
-pip install --upgrade git+https://YOUR_USERNAME:YOUR_NEW_TOKEN@github.com/XyrL02/Armagedon.git
+pip install ".[full]"
 ```
 
-> If your old PAT expired, generate a new one first (see steps above).
+### Upgrade
 
----
+```bash
+cd Armagedon && git pull && pip install --upgrade .
+```
 
-### Verify Installation
+### Verify
 
 ```bash
 armagedon --help
 ```
 
-You should see the Armagedon banner and usage information.
-
 ## Usage
 
+### Interactive CLI
+
 ```bash
-# Interactive CLI
+armagedon
+```
+
+### Nexus Mode (full auto pipeline)
+
+```bash
+# Auto: scan -> recommend -> exploit
+armagedon --nexus 192.168.1.100
+
+# Scan only
+armagedon --nexus scan 192.168.1.100
+
+# Scan + recommend (no exploit)
+armagedon --nexus recommend 192.168.1.100
+
+# Or via the interactive prompt:
+# nexus <target>
+# nexus scan <target>
+# nexus recommend <target>
+```
+
+### Manual module usage
+
+```bash
 armagedon
 
-# One-shot exploit
-armagedon -t 192.168.1.100 -m exploits/cve_2024_38077_madlicense_eop
+# List modules
+show modules
 
-# Quick scan
+# Select and configure
+use exploits/cve_2024_38077_madlicense_eop
+set RHOSTS 192.168.1.100
+
+# Check or exploit
+set MODE CHECK
+run
+```
+
+### Privilege Escalation
+
+```bash
+# Interactive privesc menu
+armagedon --privesc
+
+# Or from the interactive prompt:
+privesc
+privesc auto
+```
+
+### Quick scan
+
+```bash
 armagedon --scan 192.168.1.100:445,135,3389
 ```
 
-Or via Python module:
+### One-shot module
 
 ```bash
-python3 -m armagedon
+armagedon -t 192.168.1.100 -m exploits/cve_2024_38077_madlicense_eop
+```
+
+### Python module
+
+```bash
 python3 -m armagedon --help
 ```
+
+## Interactive Commands
+
+| Command | Description |
+|---------|-------------|
+| `help` | Show available commands |
+| `show modules` | List all modules |
+| `show options` | Show current module options |
+| `use <module>` | Select a module |
+| `set <opt> <val>` | Set a module option |
+| `run` | Execute the current module |
+| `check` | Check if target is vulnerable |
+| `search <query>` | Search modules by name or CVE |
+| `nexus <target>` | Full auto pipeline |
+| `privesc` | Privilege escalation menu |
+| `scan <target> [ports]` | Quick port scan |
+| `exit` | Exit Armagedon |
 
 ## Running Tests
 
@@ -150,14 +162,31 @@ python3 -m armagedon --help
 python3 -m armagedon.tests.test_cve_2024_38077
 ```
 
-## Modules
+## Project Structure
 
-- `scanners/smb_scanner` — SMB service detection
-- `scanners/vuln_scanner` — Vulnerability scanner
-- `exploits/cve_2024_38077_madlicense_eop` — Windows Remote Desktop Licensing Service EoP (CVE-2024-38077)
-- `exploits/cve_2024_43641_ffi_registry_eop` — Windows Registry FFI EoP (CVE-2024-43641)
-- `auxiliary/smb_enum` — SMB enumeration
+```
+armagedon/
+  cli.py                      # Interactive CLI
+  core/
+    engine.py                 # Module loading and execution
+    pipeline.py               # Nexus auto-exploit pipeline
+    recommender.py            # Exploit recommendation engine
+    fingerprints.py           # OS/service fingerprint database
+    database.py               # SQLite persistence
+    auto_privesc.py           # Privilege escalation orchestrator
+  modules/
+    exploits/                 # CVE exploit modules
+    scanners/                 # Service scanners
+    privesc/                  # Privilege escalation modules
+    auxiliary/                # Auxiliary tools
+    recon/                    # Reconnaissance modules
+  pocs/                       # Standalone PoC binaries and source
+```
+
+## Disclaimer
+
+For authorized security research and penetration testing only. Users are responsible for ensuring they have proper authorization before testing against any target.
 
 ## License
 
-For authorized security research and penetration testing only.
+MIT
