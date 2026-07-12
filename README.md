@@ -84,19 +84,34 @@ Armagedon is a modular Windows exploitation framework featuring automated scan-t
 ```bash
 git clone https://github.com/XyrL02/Armagedon.git
 cd Armagedon
-pip install .
+pip install -e .
 ```
+
+> **Kali Linux / externally-managed Python (PEP 668)?** Use one of:
+> ```bash
+> # Option A — direct install (recommended for pentesting boxes)
+> pip install -e . --break-system-packages
+>
+> # Option B — isolated virtual environment
+> python3 -m venv venv
+> source venv/bin/activate
+> pip install -e .
+> ```
 
 ### With all optional dependencies
 
 ```bash
-pip install ".[full]"
+pip install -e ".[full]"
+# or on Kali:
+pip install -e ".[full]" --break-system-packages
 ```
 
 ### Upgrade
 
 ```bash
-cd Armagedon && git pull && pip install --upgrade .
+cd Armagedon && git pull && pip install -e --upgrade .
+# on Kali:
+cd Armagedon && git pull && pip install -e --upgrade . --break-system-packages
 ```
 
 ### Verify
