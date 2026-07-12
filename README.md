@@ -513,7 +513,7 @@ armagedon/
     scanners/                 # Service scanners
     privesc/                  # Privilege escalation modules (4 modules)
     post/                     # Post-exploitation modules (5 modules)
-    auxiliary/                # Auxiliary tools (3 modules)
+    auxiliary/                # Auxiliary tools (5 modules)
     recon/                    # Reconnaissance modules
   pocs/                       # Standalone PoC binaries and source
 ```

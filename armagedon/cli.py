@@ -132,9 +132,8 @@ class ArmagedonCLI:
   nexus <target>          Full auto: scan → recommend → exploit
   nexus scan <target>     Scan only (no exploit)
   nexus recommend <target> Scan + recommend only
-  privesc                 Interactive privilege escalation
-  privesc                          Interactive module picker
-  privesc auto                     Auto-detect priv + try all modules (low→high risk)
+  privesc                 Interactive privilege escalation picker
+  privesc auto            Auto-detect priv + try all modules (low→high risk)
   privesc auto -u U -p P -d D     Auto with remote privilege detection
   privesc bh <dir> [--source SID]  BloodHound-driven escalation chain
 
