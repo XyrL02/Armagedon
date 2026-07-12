@@ -271,6 +271,13 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
         f.write(f"# Timestamp: {datetime.now().isoformat()}\n\n")
         f.write(stdout or "(no output)")
 
+    # Extract target's NetBIOS name from banner (e.g. "(name:DC)")
+    target_netbios = ""
+    if stdout:
+        m = re.search(r'\(name:(\S+?)\)', stdout)
+        if m:
+            target_netbios = m.group(1).lower()
+
     if stdout:
         in_table = False
         for line in stdout.splitlines():
@@ -430,32 +437,54 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
     else:
         print("  [-] No obviously interesting files found during spider")
 
-    # ── Step 4: net view (secondary enumeration via SMB exec) ──────────────
-    print("  [4/5] Listing shares via 'net view' ...")
-    netview_cmd = "net view"
-    netview_out = _exec_smb(target, user, passwd, netview_cmd, timeout=30)
-    netview_file = os.path.join(share_dir, "net_view.txt")
-    with open(netview_file, "w") as f:
-        f.write(f"# net view output from {target}\n\n")
-        f.write(netview_out or "(no output)")
+    # ── Step 4: Discover other domain computers via LDAP ──────────────────
+    # NOTE: nxc smb -x 'net view' never captures output (nxc limitation).
+    # We use nxc ldap -M dump-computers instead — far more reliable.
+    print("  [4/5] Discovering other domain-joined computers ...")
+    hosts_from_ldap = []
+    ldap_dump = f'{nxc} ldap {target} -u "{user_fmt}" -p "{passwd}" -M dump-computers'
+    ldap_out, _, _ = _run_cmd(ldap_dump, timeout=30)
+    ldap_file = os.path.join(share_dir, "ldap_computers.txt")
+    with open(ldap_file, "w") as f:
+        f.write(f"# LDAP computer enumeration from {target}\n\n")
+        f.write(ldap_out or "(no output — visitor may lack LDAP enumeration rights)")
 
-    # Extract hostnames from net view (lines like "\\HOSTNAME    ...")
-    hosts_from_netview = []
-    for line in (netview_out or "").splitlines():
-        m = re.match(r"\\\\(\S+)", line.strip())
+    for line in (ldap_out or "").splitlines():
+        # nxc dump-computers: "DC.COOCTUS.CORP (Windows Server 2019 Standard)"
+        m = re.search(r'([A-Z][A-Z0-9._-]+)\s+\(', line)
         if m:
-            hosts_from_netview.append(m.group(1))
-    if hosts_from_netview:
-        print(f"  [+] Discovered {len(hosts_from_netview)} other hosts via net view")
+            fqdn = m.group(1)
+            short = fqdn.split('.')[0]
+            if short.lower() != target.lower() and fqdn.lower() != target.lower():
+                hosts_from_ldap.append(fqdn)
+
+    hosts_from_ldap = list(dict.fromkeys(hosts_from_ldap))
+    # Filter out hosts that are the target itself:
+    #  1. Short name matches target IP
+    #  2. FQDN matches target IP
+    #  3. Short name matches DC's NetBIOS name from nxc banner (e.g. "DC")
+    filtered = []
+    for h in hosts_from_ldap:
+        short = h.split('.')[0].lower()
+        if short == target.lower() or h.lower() == target.lower():
+            continue
+        if target_netbios and short == target_netbios:
+            continue
+        filtered.append(h)
+    hosts_from_ldap = filtered
+
+    if hosts_from_ldap:
+        print(f"  [+] Discovered {len(hosts_from_ldap)} other hosts via LDAP")
         hosts_file = os.path.join(share_dir, "discovered_hosts.txt")
         with open(hosts_file, "w") as f:
-            for h in hosts_from_netview:
+            for h in hosts_from_ldap:
                 f.write(h + "\n")
+    else:
+        print("  [-] No other hosts discovered (visitor may lack LDAP enumeration rights)")
 
-    # ── Step 5: Enumerate shares on discovered hosts ───────────────────────
+    # ── Step 5: Enumerate shares on discovered hosts ──────────────────────
     print("  [5/5] Enumerating shares on other domain hosts ...")
-    for host in hosts_from_netview:
-        # Skip the original target (already done)
+    for host in hosts_from_ldap:
         if host.lower() == target.lower():
             continue
         print(f"      [*] {host} — listing shares ...")
@@ -466,15 +495,33 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
             with open(hfile, "w") as f:
                 f.write(f"# Shares on {host}\n\n")
                 f.write(hout)
-            # Parse and check for accessible shares on this host
-            for hline in hout.splitlines():
-                parts = hline.strip().split()
-                if len(parts) >= 1 and parts[0] and parts[0].lower() not in ("sharename", "share", "name"):
-                    rest = " ".join(parts[1:]).upper()
-                    acc = "WRITE" if "WRITE" in rest or "FULL" in rest else ("READ" if "READ" in rest else "UNKNOWN")
-                    if acc != "DENY":
-                        lateral_hosts.append({"host": host, "share": parts[0], "access": acc})
-            if lateral_hosts:
+            # Parse fixed-width nxc --shares output (same parser as Step 1)
+            hlines = hout.splitlines()
+            found_header = False
+            for hline in hlines:
+                if re.search(r'Share\s+Permissions', hline, re.IGNORECASE):
+                    found_header = True
+                    continue
+                if re.match(r'^\s*-+\s+-+\s+-+', hline.strip()):
+                    continue
+                if not found_header:
+                    continue
+                stripped = re.sub(r'^\S+\s+\S+\s+\S+\s+\S+\s+', '', hline).strip()
+                parts = stripped.split()
+                if not parts:
+                    continue
+                share_name = parts[0]
+                if share_name.lower() in ("sharename", "share", "name", "-----"):
+                    continue
+                rest = " ".join(parts[1:]).upper()
+                if any(kw in rest for kw in ("WRITE", "FULL")):
+                    acc = "WRITE"
+                elif "READ" in rest:
+                    acc = "READ"
+                else:
+                    acc = "CHECK"
+                lateral_hosts.append({"host": host, "share": share_name, "access": acc})
+            if any(lh["host"] == host for lh in lateral_hosts):
                 print(f"          → accessible shares on {host}")
 
     if lateral_hosts:
