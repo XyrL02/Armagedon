@@ -138,6 +138,9 @@ class ArmagedonCLI:
   privesc                 Interactive privilege escalation
   privesc auto            Auto-escalate (low→high risk)
 
+[bold cyan]AD Post-Enum[/]
+  ad_post_enum <target> -u user -p pass -d domain  Full AD post-exploitation loop
+
 [bold cyan]Scan[/]
   scan <target> <ports>  Quick port scan
   info            Show current module info
@@ -390,6 +393,49 @@ class ArmagedonCLI:
         else:
             privesc.interactive_run()
 
+    def do_ad_post_enum(self, arg):
+        """AD Post-Exploitation Enumeration — full automated AD post-exploitation loop."""
+        parts = arg.split()
+        if not parts:
+            console.print("[yellow]Usage: ad_post_enum <target> [-u user] [-p pass] [-d domain] [--mode full|enum|dump|kerb|crack|spray][/]")
+            console.print("[dim]Example: ad_post_enum 10.10.10.1 -u admin -p Pass123 -d CORP.LOCAL[/]")
+            return
+
+        from armagedon.modules.post import ad_post_enum
+        target_ip = parts[0]
+        user = passwd = domain = ""
+        mode = "FULL"
+
+        i = 1
+        while i < len(parts):
+            if parts[i] == "-u" and i + 1 < len(parts):
+                user = parts[i + 1]; i += 2
+            elif parts[i] == "-p" and i + 1 < len(parts):
+                passwd = parts[i + 1]; i += 2
+            elif parts[i] == "-d" and i + 1 < len(parts):
+                domain = parts[i + 1]; i += 2
+            elif parts[i] == "--mode" and i + 1 < len(parts):
+                mode = parts[i + 1].upper(); i += 2
+            else:
+                i += 1
+
+        if not user or not passwd or not domain:
+            console.print("[red][!][/] All required: -u <user> -p <pass> -d <domain>")
+            return
+
+        opts = {
+            "RHOSTS": target_ip,
+            "USERNAME": user,
+            "PASSWORD": passwd,
+            "DOMAIN": domain,
+            "MODE": mode,
+            "STEPS": "TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY" if mode == "FULL" else mode,
+        }
+        self.engine.set_target(target_ip)
+        console.print(f"\n[bold cyan][*][/] Running AD Post-Enum against [bold]{target_ip}[/] ({domain}\\{user})\n")
+        result = ad_post_enum.run(options=opts, mode="EXPLOIT")
+        self._show_result(result)
+
     do_info = lambda self, _: self._show_info()
     do_question_mark = do_help
 
@@ -425,6 +471,7 @@ class ArmagedonCLI:
                     "modules": lambda _: self.do_show("modules"),
                     "nexus": self.do_nexus,
                     "privesc": self.do_privesc,
+                    "ad_post_enum": self.do_ad_post_enum,
                 }
 
                 handler = handler_map.get(cmd)

