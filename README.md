@@ -63,6 +63,7 @@ Armagedon is a modular Windows exploitation framework featuring automated scan-t
 
 | Module | Description |
 |--------|-------------|
+| `bloodhound_analyzer` | Load BloodHound JSON, find privilege escalation paths, auto-execute attack chains |
 | `kerberos_attack` | ASREPROAST, KERBEROAST, Pass-the-Ticket, Golden/Silver Ticket |
 | `password_spray` | Lockout-aware password spraying across Kerberos/NTLM services |
 | `ldap_enum` | 12 LDAP enumeration categories: users, groups, delegation, LAPS, GMSA, etc. |
@@ -236,6 +237,58 @@ run
 
 **Prerequisites:** `nxc` (NetExec), `john` (John the Ripper), `impacket` (GetUserSPNs, GetNPUsers)
 
+### BloodHound Attack Path Analysis
+
+```bash
+# Analyze BloodHound data (find paths, no execution)
+bloodhound ./loot/bloodhound
+
+# Analyze from specific user
+bloodhound ./loot/bloodhound --source visitor
+
+# Analyze and auto-execute best paths
+bloodhound ./loot/bloodhound --source visitor --mode exploit --auto-exec
+
+# Limit depth and paths
+bloodhound ./loot/bloodhound --max-depth 4 --max-paths 10
+
+# Target specific SID
+bloodhound ./loot/bloodhound --target S-1-5-21-...-512
+
+# Via module system
+use auxiliary/bloodhound_analyzer
+set BLOODHOUND_DIR ./loot/bloodhound
+set SOURCE_USER visitor
+set MODE EXPLOIT
+set AUTO_EXEC true
+run
+```
+
+**What bloodhound does:**
+1. Loads SharpHound/BloodHound JSON files (users.json, groups.json, computers.json, ACLs, sessions)
+2. Builds a relationship graph of all AD objects and their edges
+3. Identifies 10 types of privilege escalation paths:
+   - **GROUP_MEMBERSHIP** — MemberOf chain to Domain Admins
+   - **ADMIN_ACCESS** — AdminTo on computer → DA
+   - **SESSION_HIJACK** — HasSession → AdminTo on DA
+   - **DELEGATION_ABUSE** — AllowedToDelegate (unconstrained/constrained)
+   - **RBCD_ABUSE** — GenericAll/WriteOwner/WriteDACL → RBCD
+   - **ACL_ABUSE** — GenericAll/WriteDACL on user/group → DA
+   - **PASSWORD_RESET** — ForceChangePassword on DA user
+   - **ACL_CHAIN** — WriteDACL → AddMember → DA
+   - **SID_HISTORY** — HasSIDHistory abuse
+   - **DCOM_ABUSE** — ExecuteDCOM on computer
+4. Ranks paths by severity (critical > high > medium) and effort (low > medium > high)
+5. Auto-executes the most promising paths using existing Armagedon modules
+6. Exports all paths to JSON for reporting
+
+**Modes:**
+- `CHECK` — verify files load, show summary
+- `ANALYZE` — find and display paths (no execution)
+- `EXPLOIT` — find paths + auto-execute promising ones (requires `--auto-exec`)
+
+**BloodHound input:** Place SharpHound collection output (JSON files) in a directory, or point to a single JSON file.
+
 ### Quick scan
 
 ```bash
@@ -268,6 +321,8 @@ python3 -m armagedon --help
 | `search <query>` | Search modules by name or CVE |
 | `nexus <target>` | Full auto pipeline |
 | `privesc` | Privilege escalation menu |
+| `ad_post_enum <target>` | Full AD post-exploitation loop |
+| `bloodhound <dir>` | BloodHound attack path analysis |
 | `scan <target> [ports]` | Quick port scan |
 | `loot` | Show collected loot/credentials |
 | `sessions` | Show active sessions |
@@ -285,6 +340,7 @@ armagedon/
     fingerprints.py           # OS/service fingerprint database
     database.py               # SQLite persistence
     auto_privesc.py           # Privilege escalation orchestrator
+    bloodhound.py             # BloodHound attack path analyzer
   modules/
     exploits/                 # CVE exploit modules (10 modules)
     scanners/                 # Service scanners

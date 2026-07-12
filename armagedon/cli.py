@@ -141,6 +141,9 @@ class ArmagedonCLI:
 [bold cyan]AD Post-Enum[/]
   ad_post_enum <target> -u user -p pass -d domain  Full AD post-exploitation loop
 
+[bold cyan]BloodHound[/]
+  bloodhound <dir> [--source user] [--mode analyze|exploit] [--auto-exec]  Analyze BH data
+
 [bold cyan]Scan[/]
   scan <target> <ports>  Quick port scan
   info            Show current module info
@@ -436,6 +439,71 @@ class ArmagedonCLI:
         result = ad_post_enum.run(options=opts, mode="EXPLOIT")
         self._show_result(result)
 
+    def do_bloodhound(self, arg):
+        """BloodHound Attack Path Analyzer — load BH JSON, find privesc paths, auto-execute."""
+        parts = arg.split()
+        if not parts:
+            console.print("[yellow]Usage: bloodhound <dir_or_file> [--source user] [--target sid] [--mode analyze|exploit] [--auto-exec][/]")
+            console.print("[dim]Example: bloodhound ./loot/bloodhound --source visitor --mode exploit --auto-exec[/]")
+            return
+
+        from armagedon.modules.auxiliary import bloodhound_analyzer
+
+        bh_path = parts[0]
+        source = target_sid = ""
+        mode = "ANALYZE"
+        auto_exec = False
+        max_depth = 6
+        max_paths = 20
+
+        i = 1
+        while i < len(parts):
+            if parts[i] == "--source" and i + 1 < len(parts):
+                source = parts[i + 1]; i += 2
+            elif parts[i] == "--target" and i + 1 < len(parts):
+                target_sid = parts[i + 1]; i += 2
+            elif parts[i] == "--mode" and i + 1 < len(parts):
+                mode = parts[i + 1].upper(); i += 2
+            elif parts[i] == "--auto-exec":
+                auto_exec = True; i += 1
+            elif parts[i] == "--max-depth" and i + 1 < len(parts):
+                max_depth = int(parts[i + 1]); i += 2
+            elif parts[i] == "--max-paths" and i + 1 < len(parts):
+                max_paths = int(parts[i + 1]); i += 2
+            else:
+                i += 1
+
+        # Determine if path is a directory or file
+        bh_path_expanded = os.path.expanduser(bh_path)
+        if os.path.isdir(bh_path_expanded):
+            opts = {"BLOODHOUND_DIR": bh_path_expanded}
+        elif os.path.isfile(bh_path_expanded):
+            opts = {"BLOODHOUND_FILE": bh_path_expanded}
+        else:
+            console.print(f"[red][!][/] Not found: {bh_path}")
+            return
+
+        opts.update({
+            "SOURCE_USER": source,
+            "TARGET_SID": target_sid,
+            "MODE": mode,
+            "MAX_DEPTH": max_depth,
+            "MAX_PATHS": max_paths,
+            "AUTO_EXEC": auto_exec,
+            "AUTO_EXEC_LIMIT": 5,
+        })
+
+        # Add credentials if available from current module options
+        if self.engine.active_module:
+            mod_opts = self.engine.active_module.get("options", {})
+            for k in ("USERNAME", "PASSWORD", "DOMAIN"):
+                if mod_opts.get(k):
+                    opts[k] = mod_opts[k]
+
+        console.print(f"\n[bold cyan][*][/] BloodHound Analyzer — mode: {mode}\n")
+        result = bloodhound_analyzer.run(options=opts, mode=mode)
+        self._show_result(result)
+
     do_info = lambda self, _: self._show_info()
     do_question_mark = do_help
 
@@ -472,6 +540,7 @@ class ArmagedonCLI:
                     "nexus": self.do_nexus,
                     "privesc": self.do_privesc,
                     "ad_post_enum": self.do_ad_post_enum,
+                    "bloodhound": self.do_bloodhound,
                 }
 
                 handler = handler_map.get(cmd)
