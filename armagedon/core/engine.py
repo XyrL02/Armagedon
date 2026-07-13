@@ -92,8 +92,8 @@ class ArmagedonEngine:
         results = []
         for m in self.modules:
             if query in m["name"].lower() or \
-               query in m.get("cve", "").lower() or \
-               query in m.get("desc", "").lower():
+               query in (m.get("cve") or "").lower() or \
+               query in (m.get("desc") or "").lower():
                 results.append(m)
         return results
 
