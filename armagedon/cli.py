@@ -140,6 +140,11 @@ class ArmagedonCLI:
 [bold cyan]AD Post-Enum[/]
   ad_post_enum <target> -u user -p pass -d domain  Full AD post-exploitation loop
 
+[bold cyan]Constrained Delegation / Kerberos[/]
+  constrained_delegation <target> -u user -p pass -d domain [--spn SPN] [--mode ENUM|EXPLOIT]
+  ccache_to_shell <target> -d domain --ticket <ccache> [--method auto|smbexec|smbclient|evil-winrm]
+  secretsdump_bypass <target> -d domain --ticket <ccache> [--method auto|secretsdump_standard|secretsdump_vss]
+
 [bold cyan]BloodHound[/]
   bloodhound <dir> [--source user] [--mode analyze|exploit] [--auto-exec]  Analyze BH data
 
@@ -570,6 +575,150 @@ class ArmagedonCLI:
 
         console.print(f"\n[bold cyan][*][/] BloodHound Analyzer — mode: {mode}\n")
         result = bloodhound_analyzer.run(options=opts, mode=mode)
+        self._show_result(result)
+
+    def do_constrained_delegation(self, arg):
+        """Constrained Delegation exploitation — S4U2Self/S4U2Proxy attack chain.
+
+        Usage:
+          constrained_delegation <target> -u user -p pass -d domain [--spn SPN] [--mode ENUM|EXPLOIT]
+          constrained_delegation <target> -u user -p pass -d domain --ticket <ccache> --lateral-method smbexec
+        """
+        from armagedon.modules.exploits import exploit_constrained_delegation as cd_mod
+
+        parts = arg.split()
+        if not parts:
+            console.print("[yellow]Usage: constrained_delegation <target> -u user -p pass -d domain [options][/]")
+            console.print("[dim]Options: --spn SPN, --target-user USER, --ticket CCACHE, --lateral-method METHOD, --mode ENUM|EXPLOIT[/]")
+            return
+
+        target_ip = parts[0]
+        user = passwd = domain = spn = target_user = ticket = lateral = ""
+        mode = "ENUM"
+
+        i = 1
+        while i < len(parts):
+            if parts[i] == "-u" and i + 1 < len(parts):
+                user = parts[i + 1]; i += 2
+            elif parts[i] == "-p" and i + 1 < len(parts):
+                passwd = parts[i + 1]; i += 2
+            elif parts[i] == "-d" and i + 1 < len(parts):
+                domain = parts[i + 1]; i += 2
+            elif parts[i] == "--spn" and i + 1 < len(parts):
+                spn = parts[i + 1]; i += 2
+            elif parts[i] == "--target-user" and i + 1 < len(parts):
+                target_user = parts[i + 1]; i += 2
+            elif parts[i] == "--ticket" and i + 1 < len(parts):
+                ticket = parts[i + 1]; i += 2
+            elif parts[i] == "--lateral-method" and i + 1 < len(parts):
+                lateral = parts[i + 1]; i += 2
+            elif parts[i] == "--mode" and i + 1 < len(parts):
+                mode = parts[i + 1].upper(); i += 2
+            else:
+                i += 1
+
+        opts = {
+            "RHOSTS": target_ip, "DOMAIN": domain,
+            "USERNAME": user, "PASSWORD": passwd,
+            "TARGET_SPN": spn, "TARGET_USER": target_user or "Administrator",
+            "TICKET_FILE": ticket,
+            "LATERAL_SHELL": lateral or "smbexec",
+        }
+
+        console.print(f"\n[bold cyan][*][/] Constrained Delegation — {target_ip} ({domain})\n")
+        result = cd_mod.run(options=opts, target=target_ip, mode=mode)
+        self._show_result(result)
+
+    def do_ccache_to_shell(self, arg):
+        """Use a .ccache ticket for lateral movement.
+
+        Usage:
+          ccache_to_shell <target> -d domain --ticket <ccache> [--method auto|smbexec|smbclient|evil-winrm]
+        """
+        from armagedon.modules.exploits import exploit_ccache_to_shell as cs_mod
+
+        parts = arg.split()
+        if not parts:
+            console.print("[yellow]Usage: ccache_to_shell <target> -d domain --ticket <ccache> [--method METHOD][/]")
+            return
+
+        target_ip = parts[0]
+        domain = ticket = method = ""
+
+        i = 1
+        while i < len(parts):
+            if parts[i] == "-d" and i + 1 < len(parts):
+                domain = parts[i + 1]; i += 2
+            elif parts[i] == "--ticket" and i + 1 < len(parts):
+                ticket = parts[i + 1]; i += 2
+            elif parts[i] == "--method" and i + 1 < len(parts):
+                method = parts[i + 1]; i += 2
+            else:
+                i += 1
+
+        if not ticket:
+            console.print("[red][!][/] --ticket <ccache_file> required")
+            return
+
+        opts = {
+            "RHOSTS": target_ip, "DOMAIN": domain,
+            "TICKET_FILE": ticket, "LATERAL_METHOD": method or "auto",
+        }
+
+        console.print(f"\n[bold cyan][*][/] CCache-to-Shell — {target_ip}\n")
+        result = cs_mod.run(options=opts, target=target_ip, mode="EXPLOIT")
+        self._show_result(result)
+
+    def do_secretsdump_bypass(self, arg):
+        """Secretsdump with SPN validation bypass — work around Impacket bugs.
+
+        Usage:
+          secretsdump_bypass <target> -d domain --ticket <ccache> [--method auto|secretsdump_standard|secretsdump_vss|smbexec_reg]
+          secretsdump_bypass <target> -d domain -u user -p pass
+        """
+        from armagedon.modules.exploits import exploit_secretsdump_bypass as sd_mod
+
+        parts = arg.split()
+        if not parts:
+            console.print("[yellow]Usage: secretsdump_bypass <target> -d domain [options][/]")
+            console.print("[dim]Options: --ticket CCACHE, -u USER -p PASS, --method METHOD, --mode EXPLOIT[/]")
+            return
+
+        target_ip = parts[0]
+        user = passwd = domain = ticket = lm = nt = method = ""
+        mode = "EXPLOIT"
+
+        i = 1
+        while i < len(parts):
+            if parts[i] == "-u" and i + 1 < len(parts):
+                user = parts[i + 1]; i += 2
+            elif parts[i] == "-p" and i + 1 < len(parts):
+                passwd = parts[i + 1]; i += 2
+            elif parts[i] == "-d" and i + 1 < len(parts):
+                domain = parts[i + 1]; i += 2
+            elif parts[i] == "--ticket" and i + 1 < len(parts):
+                ticket = parts[i + 1]; i += 2
+            elif parts[i] == "--hash" and i + 1 < len(parts):
+                nt = parts[i + 1]; i += 2
+            elif parts[i] == "--lm" and i + 1 < len(parts):
+                lm = parts[i + 1]; i += 2
+            elif parts[i] == "--method" and i + 1 < len(parts):
+                method = parts[i + 1]; i += 2
+            elif parts[i] == "--mode" and i + 1 < len(parts):
+                mode = parts[i + 1].upper(); i += 2
+            else:
+                i += 1
+
+        opts = {
+            "RHOSTS": target_ip, "DOMAIN": domain,
+            "USERNAME": user, "PASSWORD": passwd,
+            "HASH": nt, "LMHASH": lm,
+            "TICKET_FILE": ticket,
+            "METHOD": method or "auto",
+        }
+
+        console.print(f"\n[bold cyan][*][/] Secretsdump SPN Bypass — {target_ip}\n")
+        result = sd_mod.run(options=opts, target=target_ip, mode=mode)
         self._show_result(result)
 
     do_info = lambda self, _: self._show_info()
