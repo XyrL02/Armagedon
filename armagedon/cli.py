@@ -487,14 +487,16 @@ class ArmagedonCLI:
         """AD Post-Exploitation Enumeration — full automated AD post-exploitation loop."""
         parts = arg.split()
         if not parts:
-            console.print("[yellow]Usage: ad_post_enum <target> [-u user] [-p pass] [-d domain] [--mode full|enum|dump|kerb|crack|spray][/]")
+            console.print("[yellow]Usage: ad_post_enum <target> [-u user] [-p pass] [-d domain] [--ntlm-hash hash] [--steps STEPS][/]")
             console.print("[dim]Example: ad_post_enum 10.10.10.1 -u admin -p Pass123 -d CORP.LOCAL[/]")
+            console.print("[dim]Pass-the-hash: ad_post_enum 10.10.10.1 -u admin -H aad3b435... -d CORP.LOCAL[/]")
             return
 
         from armagedon.modules.post import ad_post_enum
         target_ip = parts[0]
-        user = passwd = domain = ""
+        user = passwd = domain = ntlm_hash = ""
         mode = "FULL"
+        steps = "TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY,SHARE"
 
         i = 1
         while i < len(parts):
@@ -504,25 +506,39 @@ class ArmagedonCLI:
                 passwd = parts[i + 1]; i += 2
             elif parts[i] == "-d" and i + 1 < len(parts):
                 domain = parts[i + 1]; i += 2
+            elif parts[i] in ("-H", "--ntlm-hash") and i + 1 < len(parts):
+                ntlm_hash = parts[i + 1]; i += 2
+            elif parts[i] == "--steps" and i + 1 < len(parts):
+                steps = parts[i + 1]; i += 2
             elif parts[i] == "--mode" and i + 1 < len(parts):
-                mode = parts[i + 1].upper(); i += 2
+                mode = parts[i + 1].upper()
+                if mode == "FULL":
+                    steps = "TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY,SHARE"
+                else:
+                    steps = mode
+                i += 2
             else:
                 i += 1
 
-        if not user or not passwd or not domain:
-            console.print("[red][!][/] All required: -u <user> -p <pass> -d <domain>")
+        if not user or not domain:
+            console.print("[red][!][/] Required: -u <user> -d <domain> (-p pass OR -H hash)")
+            return
+        if not passwd and not ntlm_hash:
+            console.print("[red][!][/] Provide either -p <pass> or -H <ntlm-hash>")
             return
 
         opts = {
             "RHOSTS": target_ip,
             "USERNAME": user,
             "PASSWORD": passwd,
+            "NTLM_HASH": ntlm_hash,
             "DOMAIN": domain,
             "MODE": mode,
-            "STEPS": "TEST,ENUM,DUMP,LDAP,KERB,CRACK,SPRAY" if mode == "FULL" else mode,
+            "STEPS": steps,
         }
         self.engine.set_target(target_ip)
-        console.print(f"\n[bold cyan][*][/] Running AD Post-Enum against [bold]{target_ip}[/] ({domain}\\{user})\n")
+        auth_method = f"hash:{ntlm_hash[:16]}..." if ntlm_hash else f"pass:{passwd[:8]}..."
+        console.print(f"\n[bold cyan][*][/] Running AD Post-Enum against [bold]{target_ip}[/] ({domain}\\{user}) [{auth_method}]\n")
         result = ad_post_enum.run(options=opts, mode="EXPLOIT")
         self._show_result(result)
 
