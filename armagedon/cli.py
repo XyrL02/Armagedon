@@ -75,6 +75,8 @@ class ArmagedonCLI:
         commands = [
             "help", "?", "exit", "quit", "back", "show", "set", "use", "run",
             "check", "search", "scan", "target", "info", "options",
+            "nexus", "privesc", "ad_post_enum", "bloodhound",
+            "domain", "constrained_delegation", "ccache_to_shell", "secretsdump_bypass",
         ]
         module_names = [m["name"] for m in self.engine.modules]
         buffer = readline.get_line_buffer()
@@ -147,6 +149,18 @@ class ArmagedonCLI:
 
 [bold cyan]BloodHound[/]
   bloodhound <dir> [--source user] [--mode analyze|exploit] [--auto-exec]  Analyze BH data
+
+[bold cyan]Domain Intelligence & Attack[/]
+  domain ingest <dir> [-d domain] [-u user] [-p pass]     Ingest ldapdomaindump output
+  domain ingest-bh <dir>                                   Ingest BloodHound JSON
+  domain ingest-live <target> -u user -p pass -d domain    Live LDAP enumeration
+  domain whoami                                            Show current user analysis
+  domain whoami <user>                                     Show target user analysis
+  domain path                                              Find shortest path to DA
+  domain path <user>                                       Find path from user to DA
+  domain attack <user> <target> -u user -p pass -d domain  Execute best attack
+  domain recommend                                         Show available attacks for current user
+  domain export <file>                                     Export domain graph to JSON
 
 [bold cyan]Scan[/]
   scan <target> <ports>  Quick port scan
@@ -577,6 +591,175 @@ class ArmagedonCLI:
         result = bloodhound_analyzer.run(options=opts, mode=mode)
         self._show_result(result)
 
+    def do_domain(self, arg):
+        """Domain Intelligence & Attack — ingest AD data, analyze controls, execute attacks.
+
+        Usage:
+          domain ingest <dir> [-d domain] [-u user] [-p pass]     Ingest ldapdomaindump output
+          domain ingest-bh <dir>                                   Ingest BloodHound JSON
+          domain ingest-live <target> -u user -p pass -d domain    Live LDAP enumeration
+          domain whoami                                            Show current user analysis
+          domain whoami <user>                                     Show target user analysis
+          domain path                                              Find shortest path to DA
+          domain path <user>                                       Find path from user to DA
+          domain attack <user> <target> -u user -p pass -d domain  Execute best attack
+          domain recommend                                         Show available attacks
+          domain export <file>                                     Export domain graph to JSON
+        """
+        from armagedon.core.domain_intel import DomainIntel
+
+        parts = arg.split()
+        if not parts:
+            console.print("[yellow]Usage: domain [ingest|ingest-bh|ingest-live|whoami|path|attack|recommend|export] [options][/]")
+            return
+
+        subcmd = parts[0].lower()
+        if not hasattr(self, '_domain_intel'):
+            self._domain_intel = DomainIntel()
+
+        intel = self._domain_intel
+
+        if subcmd == "ingest":
+            dir_path = parts[1] if len(parts) > 1 else ""
+            if not dir_path or not Path(dir_path).is_dir():
+                console.print("[red][!][/] Usage: domain ingest <ldapdomaindump_dir> [-d domain] [-u user] [-p pass][/]")
+                return
+            console.print(f"[*] Ingesting ldapdomaindump from {dir_path}...")
+            intel.ingest_ldapdomaindump(dir_path)
+            s = intel.summary()
+            console.print(f"[+] Users: {s['object_types'].get('user',0)} | "
+                          f"Groups: {s['object_types'].get('group',0)} | "
+                          f"Computers: {s['object_types'].get('computer',0)} | "
+                          f"ACLs: {s['acl_entries']}")
+
+        elif subcmd == "ingest-bh":
+            dir_path = parts[1] if len(parts) > 1 else ""
+            if not dir_path or not Path(dir_path).is_dir():
+                console.print("[red][!][/] Usage: domain ingest-bh <bloodhound_json_dir>[/]")
+                return
+            console.print(f"[*] Ingesting BloodHound JSON from {dir_path}...")
+            intel.ingest_bloodhound_json(dir_path)
+            s = intel.summary()
+            console.print(f"[+] Users: {s['object_types'].get('user',0)} | "
+                          f"Groups: {s['object_types'].get('group',0)} | "
+                          f"Computers: {s['object_types'].get('computer',0)} | "
+                          f"ACLs: {s['acl_entries']}")
+
+        elif subcmd == "ingest-live":
+            if len(parts) < 6:
+                console.print("[red][!][/] Usage: domain ingest-live <target> -u user -p pass -d domain[/]")
+                return
+            target_ip = parts[1]
+            user = passwd = domain = ""
+            i = 2
+            while i < len(parts):
+                if parts[i] == "-u" and i + 1 < len(parts):
+                    user = parts[i+1]; i += 2
+                elif parts[i] == "-p" and i + 1 < len(parts):
+                    passwd = parts[i+1]; i += 2
+                elif parts[i] == "-d" and i + 1 < len(parts):
+                    domain = parts[i+1]; i += 2
+                else:
+                    i += 1
+            if not user or not passwd or not domain:
+                console.print("[red][!][/] Need -u <user> -p <pass> -d <domain>[/]")
+                return
+            console.print(f"[*] Live LDAP enumeration against {target_ip} ({domain}\\{user})...")
+            intel.ingest_live(target_ip, domain, user, passwd)
+            s = intel.summary()
+            console.print(f"[+] Users: {s['object_types'].get('user',0)} | "
+                          f"Groups: {s['object_types'].get('group',0)} | "
+                          f"Computers: {s['object_types'].get('computer',0)} | "
+                          f"ACLs: {s['acl_entries']}")
+
+        elif subcmd == "whoami":
+            user = parts[1] if len(parts) > 1 else ""
+            if not user:
+                user = self.engine.active_module.get("options", {}).get("USERNAME", "") if self.engine.active_module else ""
+            if not user:
+                console.print("[red][!][/] Usage: domain whoami <username>[/]")
+                return
+            if not intel.summary().get("total_objects"):
+                console.print("[yellow][!] No domain data loaded. Run domain ingest/ingest-bh first.[/]")
+                return
+            intel.print_whoami(user)
+            intel.print_outbound_control(user)
+
+        elif subcmd == "path":
+            user = parts[1] if len(parts) > 1 else ""
+            if not user:
+                user = self.engine.active_module.get("options", {}).get("USERNAME", "") if self.engine.active_module else ""
+            if not user:
+                console.print("[red][!][/] Usage: domain path <username>[/]")
+                return
+            path = intel.find_shortest_path_to_da(user)
+            if not path:
+                console.print(f"[yellow]No path from {user} to Domain Admins found[/]")
+            else:
+                console.print(f"\n[bold green][+][/] Shortest path: {' -> '.join(path)}")
+
+        elif subcmd == "attack":
+            if len(parts) < 3:
+                console.print("[red][!][/] Usage: domain attack <compromised_user> <target> -u user -p pass -d domain[/]")
+                return
+            user = parts[1]
+            target = parts[2]
+            user = passwd = domain = ""
+            i = 3
+            while i < len(parts):
+                if parts[i] == "-u" and i + 1 < len(parts):
+                    user = parts[i+1]; i += 2
+                elif parts[i] == "-p" and i + 1 < len(parts):
+                    passwd = parts[i+1]; i += 2
+                elif parts[i] == "-d" and i + 1 < len(parts):
+                    domain = parts[i+1]; i += 2
+                else:
+                    i += 1
+            if not user or not passwd or not domain:
+                console.print("[red][!][/] Need -u <user> -p <pass> -d <domain>[/]")
+                return
+            rec = intel.recommend_attack(user, target)
+            console.print(f"\n[bold]Recommendation:[/] {rec.get('right','?')} on {rec.get('target','?')}")
+            if "example_commands" in rec:
+                console.print("[dim]Example commands:[/]")
+                for cmd in rec["example_commands"]:
+                    console.print(f"  {cmd}")
+            dc_ip = self.engine.current_target or ""
+            from armagedon.modules.auxiliary import domain_attack as da_mod
+            opts = {"DC_IP": dc_ip, "DOMAIN": domain, "USERNAME": user,
+                    "PASSWORD": passwd, "TARGET_USER": target, "MODE": "CHECK"}
+            result = da_mod.run(options=opts, mode="CHECK")
+            self._show_result(result)
+
+        elif subcmd == "recommend":
+            user = parts[1] if len(parts) > 1 else ""
+            if not user:
+                user = self.engine.active_module.get("options", {}).get("USERNAME", "") if self.engine.active_module else ""
+            if not user:
+                console.print("[red][!][/] Usage: domain recommend <username>[/]")
+                return
+            if not intel.summary().get("total_objects"):
+                console.print("[yellow][!] No domain data loaded. Run domain ingest/ingest-bh first.[/]")
+                return
+            rec = intel.recommend_attack(user)
+            console.print(f"\n[bold]Best attack:[/] {rec.get('right','?')} on {rec.get('target','?')}")
+            if "example_commands" in rec:
+                console.print("[dim]Example commands:[/]")
+                for cmd in rec["example_commands"]:
+                    console.print(f"  {cmd}")
+
+        elif subcmd == "export":
+            file_path = parts[1] if len(parts) > 1 else ""
+            if not file_path:
+                console.print("[red][!][/] Usage: domain export <output_file.json>[/]")
+                return
+            intel.export_json(file_path)
+            console.print(f"[+] Exported to {file_path}")
+
+        else:
+            console.print(f"[red][!][/] Unknown subcommand: {subcmd}")
+            console.print("[dim]Available: ingest, ingest-bh, ingest-live, whoami, path, attack, recommend, export[/]")
+
     def do_constrained_delegation(self, arg):
         """Constrained Delegation exploitation — S4U2Self/S4U2Proxy attack chain.
 
@@ -759,6 +942,7 @@ class ArmagedonCLI:
                     "privesc": self.do_privesc,
                     "ad_post_enum": self.do_ad_post_enum,
                     "bloodhound": self.do_bloodhound,
+                    "domain": self.do_domain,
                 }
 
                 handler = handler_map.get(cmd)
