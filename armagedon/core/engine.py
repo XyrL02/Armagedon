@@ -23,7 +23,7 @@ class ArmagedonEngine:
         self.discover_modules()
 
     def _ensure_init_files(self):
-        for sub in ["", "scanners", "exploits", "post", "auxiliary"]:
+        for sub in ["", "scanners", "exploits", "post", "auxiliary", "privesc", "recon"]:
             init_path = self.modules_dir / sub / "__init__.py"
             if not init_path.exists():
                 init_path.parent.mkdir(parents=True, exist_ok=True)

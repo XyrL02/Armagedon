@@ -18,6 +18,9 @@ ALL_MODULES = [
     'modules.exploits.cve_2025_21217_kernel_type_confusion',
     'modules.exploits.cve_2024_38077_madlicense_eop',
     'modules.exploits.cve_2024_43641_ffi_registry_eop',
+    'modules.exploits.exploit_ccache_to_shell',
+    'modules.exploits.exploit_constrained_delegation',
+    'modules.exploits.exploit_secretsdump_bypass',
     'modules.privesc.token_steal',
     'modules.privesc.uac_bypass',
     'modules.privesc.service_privesc',
@@ -26,9 +29,15 @@ ALL_MODULES = [
     'modules.post.persistence',
     'modules.post.lateral_movement',
     'modules.post.network_discovery',
+    'modules.post.ad_post_enum',
     'modules.auxiliary.kerberos_attack',
     'modules.auxiliary.password_spray',
     'modules.auxiliary.ldap_enum',
+    'modules.auxiliary.smb_enum',
+    'modules.auxiliary.bloodhound_analyzer',
+    'modules.recon.os_fingerprint',
+    'modules.scanners.smb_scanner',
+    'modules.scanners.vuln_scanner',
 ]
 
 # Modules that expose a NAME attribute (privesc + post + potato_attacks)
@@ -52,6 +61,7 @@ MODULES_WITH_CHECK = [
     'modules.exploits.cve_2025_21217_kernel_type_confusion',
     'modules.exploits.cve_2024_38077_madlicense_eop',
     'modules.exploits.cve_2024_43641_ffi_registry_eop',
+    'modules.exploits.exploit_constrained_delegation',
     'modules.privesc.token_steal',
     'modules.privesc.uac_bypass',
     'modules.privesc.service_privesc',
@@ -59,6 +69,11 @@ MODULES_WITH_CHECK = [
     'modules.auxiliary.kerberos_attack',
     'modules.auxiliary.password_spray',
     'modules.auxiliary.ldap_enum',
+    'modules.auxiliary.smb_enum',
+    'modules.auxiliary.bloodhound_analyzer',
+    'modules.post.ad_post_enum',
+    'modules.scanners.smb_scanner',
+    'modules.scanners.vuln_scanner',
 ]
 
 
@@ -105,9 +120,16 @@ MODULES_WITH_OPTIONS = [
     'modules.exploits.cve_2025_21217_kernel_type_confusion',
     'modules.exploits.cve_2024_38077_madlicense_eop',
     'modules.exploits.cve_2024_43641_ffi_registry_eop',
+    'modules.exploits.exploit_ccache_to_shell',
+    'modules.exploits.exploit_constrained_delegation',
+    'modules.exploits.exploit_secretsdump_bypass',
     'modules.auxiliary.kerberos_attack',
     'modules.auxiliary.password_spray',
     'modules.auxiliary.ldap_enum',
+    'modules.auxiliary.smb_enum',
+    'modules.post.ad_post_enum',
+    'modules.scanners.smb_scanner',
+    'modules.scanners.vuln_scanner',
 ]
 
 

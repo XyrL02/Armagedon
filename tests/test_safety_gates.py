@@ -1,4 +1,5 @@
 """Test safety gate functionality."""
+import contextlib
 import importlib
 import os
 import sys
@@ -24,6 +25,8 @@ SAFETY_MODULES = [
 MODULES_NEEDING_MOCK = {
     'modules.exploits.zerologon': '_check_dc_reachable',
     'modules.exploits.samaccountname_spoof': '_check_dc_reachable',
+    'modules.exploits.cve_2024_26229_csc_privesc': '_smb_os',
+    'modules.exploits.cve_2024_26234_proxy_key_spoofing': '_smb_os_probe',
 }
 
 
@@ -42,10 +45,11 @@ def test_exploit_blocked_in_safe_mode(module_path):
         'DOMAIN': 'test.local',
     }
 
-    # Modules with pre-gate network calls need _check_dc_reachable mocked
+    # Modules with pre-gate network calls need their socket functions mocked
     mock_target = MODULES_NEEDING_MOCK.get(module_path)
     if mock_target:
-        with patch.object(mod, mock_target, return_value=True):
+        mock_return = {"detected": True, "build": 17763, "os": "Windows NT 10.0.17763"}
+        with patch.object(mod, mock_target, return_value=mock_return):
             result = mod.run(options=options, mode='EXPLOIT')
     else:
         result = mod.run(options=options, mode='EXPLOIT')
@@ -76,10 +80,39 @@ def test_exploit_proceeds_when_safe_mode_off(module_path):
     }
 
     mock_target = MODULES_NEEDING_MOCK.get(module_path)
+    mock_return = {"detected": True, "build": 17763, "os": "Windows NT 10.0.17763"}
+
+    # Build a combined mock context: the pre-gate network call, subprocess.run,
+    # socket.socket, and shutil.which so the exploit logic never blocks on I/O
+    import subprocess as _subprocess
+    import socket as _socket
+
+    def mock_subprocess_run(cmd, *args, **kwargs):
+        """Return a dummy CompletedCommand so no real network calls happen."""
+        result = _subprocess.CompletedProcess(cmd=cmd, returncode=1,
+                                              stdout="", stderr="connection refused")
+        return result
+
+    def mock_socket_create(*args, **kwargs):
+        """Return a mock socket that connects immediately."""
+        sock = MagicMock()
+        sock.connect.return_value = None
+        sock.recv.return_value = b""
+        sock.send.return_value = None
+        sock.close.return_value = None
+        return sock
+
+    combined_mocks = [
+        patch("subprocess.run", side_effect=mock_subprocess_run),
+        patch("socket.socket", side_effect=mock_socket_create),
+    ]
+
     if mock_target:
-        with patch.object(mod, mock_target, return_value=True):
-            result = mod.run(options=options, mode='EXPLOIT')
-    else:
+        combined_mocks.append(patch.object(mod, mock_target, return_value=mock_return))
+
+    with contextlib.ExitStack() as stack:
+        for m in combined_mocks:
+            stack.enter_context(m)
         result = mod.run(options=options, mode='EXPLOIT')
 
     # Must NOT be blocked by safety gate (may fail for other reasons like
@@ -96,7 +129,35 @@ def test_check_always_runs(module_path):
     mod.SAFE_MODE = 1
 
     options = {'RHOSTS': '192.168.1.1'}
-    result = mod.run(options=options, mode='CHECK')
+
+    mock_target = MODULES_NEEDING_MOCK.get(module_path)
+    mock_return = {"detected": True, "build": 17763, "os": "Windows NT 10.0.17763"}
+
+    import subprocess as _subprocess
+    import socket as _socket
+
+    def mock_subprocess_run(cmd, *args, **kwargs):
+        return _subprocess.CompletedProcess(cmd=cmd, returncode=1,
+                                            stdout="", stderr="connection refused")
+
+    def mock_socket_create(*args, **kwargs):
+        sock = MagicMock()
+        sock.connect.return_value = None
+        sock.recv.return_value = b""
+        sock.close.return_value = None
+        return sock
+
+    combined_mocks = [
+        patch("subprocess.run", side_effect=mock_subprocess_run),
+        patch("socket.socket", side_effect=mock_socket_create),
+    ]
+    if mock_target:
+        combined_mocks.append(patch.object(mod, mock_target, return_value=mock_return))
+
+    with contextlib.ExitStack() as stack:
+        for m in combined_mocks:
+            stack.enter_context(m)
+        result = mod.run(options=options, mode='CHECK')
 
     # CHECK mode must not produce a BLOCKED status from the safety gate
     assert result.get('data', {}).get('status') != 'BLOCKED', (
